@@ -64,7 +64,9 @@
     const kp = new Map();
     for (const k of BASE.kpis || []) kp.set(`${k.a}-${k.m}-${k.k}`, k.v);
     const hist = new Map((BASE.historico || []).map((x) => [`${x.a}-${x.m}`, x.v]));
-    IDX = { h, kp, hist, anios: [...anios].sort(), corte };
+    const cartNom = {};
+    [...BASE.hechos].filter((r) => r.d === "cartera" && r.n && r.n !== "(sin asignar)").sort((x, y) => x.a * 12 + x.m - (y.a * 12 + y.m)).forEach((r) => (cartNom[r.k] = r.n));
+    IDX = { h, kp, hist, anios: [...anios].sort(), corte, cartNom };
   }
   const hecho = (a, m, d, k) => IDX.h.get(`${a}-${m}-${d}-${k}`);
   const tot = (a, m) => hecho(a, m, "total", "total");
@@ -209,7 +211,7 @@
     if (!window.Chart) return;
     const C = colores();
     Chart.defaults.font.family = css("--f-body") || "system-ui";
-    Chart.defaults.font.size = 12;
+    Chart.defaults.font.size = UI.foco ? Math.max(12, Math.min(20, Math.round(window.innerWidth / 100))) : 12;
     Chart.defaults.color = C.ink2;
     Chart.defaults.borderColor = C.grid;
     Chart.defaults.plugins.legend.labels.boxWidth = 10;
@@ -265,7 +267,7 @@
     const b = BLOQUES.find((x) => x[0] === id);
     const J = ctx().clave;
     const nota = (junta(J).notas || {})[id] || "";
-    return `<section class="bloque" id="b-${id}"><header><span class="bloque-num">${b[1]}</span><h2>${b[2]}</h2><span class="pregunta">${b[3]}</span><div class="acciones-h">${acciones}</div></header>
+    return `<section class="bloque" id="b-${id}"><header><span class="bloque-num">${b[1]}</span><h2>${b[2]}</h2><span class="pregunta">${b[3]}</span><div class="acciones-h">${acciones}${botonAmpliar(id)}</div></header>
       <div class="bloque-cuerpo">${cuerpo}
       <details ${nota ? "open" : ""}><summary class="campo-label" style="cursor:pointer">Notas de la junta · ${b[2]}</summary><textarea class="notas" data-nota="${id}" id="nota-${id}" placeholder="Lo que se comentó, acuerdos o aclaraciones de este bloque">${esc(nota)}</textarea></details>
       </div></section>`;
@@ -359,7 +361,7 @@
         <span style="color:var(--ink2);font-size:13px">El déficit acumulado pasó de ${fmtM(d.defP)} a ${fmtM(d.defJ)}.</span></div>
       <div class="grid-6-4">
         <div><div class="sub">Guion para abrir la junta <span class="der"><button class="btn chico" data-copiar="guion" type="button">Copiar texto</button></span></div><p class="guion" id="guion">${guion}</p>
-          <label class="campo-label" for="diag-txt">Diagnóstico en una frase (lo que dirá Iván)</label>
+          <label class="campo-label" for="diag-txt">Diagnóstico en una frase</label>
           <textarea class="campo" id="diag-txt" data-junta-campo="diagnostico" placeholder="${esc(d.txt)}. Ej.: seguimos ${fmtP(1 - (cumA || 0))} debajo del objetivo; en el mes ${d.estado} ${fmtM(Math.abs(d.delta))}.">${esc(J.diagnostico || "")}</textarea></div>
         <div>${tablaRes}
           <p class="nota-pie">Meta anual ${c.Ja}: ${fmt$(c.mAnual)} · Falta ${fmt$(falta)} · ${restantes} meses por delante · Promedio mensual actual ${fmtM(promedio)}.</p></div>
@@ -725,13 +727,13 @@
   /*                       PARTE 2 · ANÁLISIS ADICIONAL                     */
   /* ===================================================================== */
   const SECC2 = [
-    ["historico", "Histórico y estacionalidad"], ["anual", "Año contra año"], ["calor", "Mapa de cumplimiento"],
+    ["general", "Análisis general de ISEL"], ["historico", "Histórico y estacionalidad"], ["anual", "Año contra año"], ["calor", "Mapa de cumplimiento"],
     ["mezcla", "Línea × cartera"], ["concentracion", "Concentración"], ["clientes", "Movimiento de clientes"],
     ["tipo", "Tipo de cliente"], ["simulador", "Simulador de cierre"],
   ];
   function seccion(id, titulo, pregunta, cuerpo) {
     const i = SECC2.findIndex((x) => x[0] === id);
-    return `<section class="bloque" id="b-${id}"><header><span class="bloque-num">${String.fromCharCode(65 + i)}</span><h2>${titulo}</h2><span class="pregunta">${pregunta}</span></header><div class="bloque-cuerpo">${cuerpo}</div></section>`;
+    return `<section class="bloque" id="b-${id}"><header><span class="bloque-num">${String.fromCharCode(65 + i)}</span><h2>${titulo}</h2><span class="pregunta">${pregunta}</span><div class="acciones-h">${botonAmpliar(id)}</div></header><div class="bloque-cuerpo">${cuerpo}</div></section>`;
   }
 
   function sHistorico() {
@@ -844,26 +846,333 @@
       <div class="graf" style="margin-top:10px"><canvas id="g-par-c" role="img" aria-label="Pareto de carteras"></canvas></div></div>${cli}</div>`);
   }
 
+  /* ---------------------------------------------- clientes: datos y carteras */
+  const hayVC = () => !!(BASE.ventasCliente && BASE.ventasCliente.filas && BASE.ventasCliente.filas.length);
+  function nombreCartera(k) {
+    if (!k) return "—";
+    if (k === "S/C") return "Sin cartera";
+    if (k.startsWith("?")) return ((BASE.ventasCliente || {}).nombres || {})[k] || k.slice(1);
+    const n = IDX.cartNom[k];
+    return n ? `${k} ${n}` : k;
+  }
+  function ventasPorCliente(L) {
+    const set = new Set(L.map(([a, m]) => a * 100 + m)); const out = new Map();
+    for (const [a, m, cli, cart, v] of BASE.ventasCliente.filas) {
+      if (!set.has(a * 100 + m)) continue;
+      const x = out.get(cli) || { t: 0, c: new Map() };
+      x.t += v; x.c.set(cart, (x.c.get(cart) || 0) + v); out.set(cli, x);
+    }
+    return out;
+  }
+  function mesesPrevios(L, modo) {
+    if (modo === "anio") return anteriorDe(L);
+    const out = []; let [a, m] = L[0];
+    for (let i = 0; i < L.length; i++) { m--; if (m < 1) { m = 12; a--; } out.unshift([a, m]); }
+    return out;
+  }
+  // Movimiento de clientes con montos atribuidos a las carteras del año en curso
+  function movimientoClientes(c) {
+    const base = vista("cli-base", "previo");
+    const Lp = mesesPrevios(c.L, base);
+    const cur = ventasPorCliente(c.L), prev = ventasPorCliente(Lp), anio = ventasPorCliente(acumDe(c.Ja, c.Jm));
+    const filas = [];
+    for (const cli of new Set([...cur.keys(), ...prev.keys()])) {
+      const ya = anio.get(cli);
+      let carts = ya ? [...ya.c.entries()].filter(([, v]) => v > 0).sort((x, y) => y[1] - x[1]).map(([k]) => k) : [];
+      let deAnt = false;
+      if (!carts.length) { const p = prev.get(cli) || cur.get(cli); carts = p ? [...p.c.entries()].sort((x, y) => y[1] - x[1]).map(([k]) => k) : ["S/C"]; deAnt = true; }
+      const at = new Map(carts.map((k) => [k, { u: 0, a: 0 }]));
+      const meter = (x, campo) => { if (!x) return; for (const [k, v] of x.c) { const dest = at.has(k) ? k : carts[0]; at.get(dest)[campo] += v; } };
+      meter(cur.get(cli), "u"); meter(prev.get(cli), "a");
+      filas.push({ cliente: cli, carts, deAnt, at });
+    }
+    const opC = [...new Set(filas.flatMap((f) => f.carts))].sort().map((k) => ({ v: k, t: nombreCartera(k) }));
+    registrarMs("cli-carts", opC);
+    const res = [];
+    for (const f of filas) {
+      const sel = [...f.at.entries()].filter(([k]) => pasa("cli-carts", k));
+      if (!sel.length) continue;
+      const u = sel.reduce((s, [, x]) => s + x.u, 0), a = sel.reduce((s, [, x]) => s + x.a, 0);
+      if (Math.abs(u) < 0.5 && Math.abs(a) < 0.5) continue;
+      const clase = a <= 0 && u > 0 ? "nueva" : a > 0 && u <= 0 ? "perdida" : u > a ? "aumentada" : u < a ? "disminuida" : "igual";
+      res.push({ cliente: f.cliente, u, a, dif: u - a, clase, carts: f.carts.filter((k) => pasa("cli-carts", k)), todas: f.carts, deAnt: f.deAnt, desglose: sel.map(([k, x]) => ({ k, ...x })) });
+    }
+    return { filas: res, opC, Lp, base };
+  }
+  const etqCarts = (x) => {
+    if (!x.carts.length) return "—";
+    const p = nombreCartera(x.carts[0]);
+    const extra = x.todas.length > 1 ? ` <span class="sem na" title="${esc(x.todas.map(nombreCartera).join(" · "))}">${x.todas.length} carteras</span>` : "";
+    return `<span class="cod" style="margin:0">${esc(x.carts[0])}</span> ${esc(p.replace(/^C\d\d\s/, ""))}${x.deAnt ? ' <span class="cod" title="Sin venta este año; cartera del periodo de comparación">(año ant.)</span>' : ""}${extra}`;
+  };
+
   function sClientes() {
     const c = ctx();
+    if (!hayVC()) return sClientesTablero(c);
+    const { filas, opC, Lp, base } = movimientoClientes(c);
+    const per = (k) => filas.filter((x) => x.clase === k);
+    const suma = (L) => L.reduce((s, x) => s + x.dif, 0);
+    const grupos = [["perdida", "Venta perdida", "neg"], ["disminuida", "Venta disminuida", "neg"], ["aumentada", "Venta aumentada", "pos"], ["nueva", "Venta nueva", "pos"]];
+    const activosU = filas.filter((x) => x.u > 0).length, activosA = filas.filter((x) => x.a > 0).length;
+    const retenidos = filas.filter((x) => x.a > 0 && x.u > 0).length;
+    const lista = ([k, t, cls]) => {
+      const L = per(k).sort((x, y) => (cls === "neg" ? x.dif - y.dif : y.dif - x.dif)).slice(0, 10);
+      return `<div><div class="sub">${t} · ${fmt$(suma(per(k)))} <span class="der">${per(k).length} clientes</span></div><div class="tabla-wrap" style="max-height:none"><table class="t"><thead><tr><th>#</th><th>Cliente</th><th>Cartera ${c.Ja}</th><th class="n">Diferencia</th></tr></thead><tbody>${L.map((x, i) => `<tr><td class="mono" style="width:28px">${i + 1}</td><td>${esc(x.cliente)}</td><td style="font-size:12.5px">${etqCarts(x)}</td><td class="n ${cls}">${fmt$(x.dif)}</td></tr>`).join("") || '<tr><td colspan="4">Sin clientes</td></tr>'}</tbody></table></div></div>`;
+    };
+    const q = (UI.busq["cli-q"] || "").toLowerCase();
+    const desg = vista("cli-desg", "si") === "si";
+    const comp = filas.map((x) => ({ ...x, ult: x.u, ant: x.a }));
+    ordenar("cli-comp", comp, "ult:d");
+    const vis = comp.filter((x) => !q || x.cliente.toLowerCase().includes(q)).slice(0, +vista("cli-n", "25"));
+    const multi = comp.filter((x) => x.todas.length > 1).length;
+    const etP = etiquetaPeriodo(c.L), etA = etiquetaPeriodo(Lp).replace(/^(T\d|S\d|Año) · /, "");
+    const filasComp = vis.map((x) => {
+      const sub = desg && x.todas.length > 1 ? x.desglose.sort((p, r) => r.u - p.u).map((d) => `<tr class="subfila"><td style="padding-left:28px">↳ ${esc(nombreCartera(d.k))}</td><td></td><td class="n">${fmt$(d.a)}</td><td class="n">${fmt$(d.u)}</td><td class="n ${d.u - d.a < 0 ? "neg" : "pos"}">${fmt$(d.u - d.a)}</td></tr>`).join("") : "";
+      return `<tr><td>${esc(x.cliente)}</td><td style="font-size:12.5px">${etqCarts(x)}</td><td class="n">${fmt$(x.ant)}</td><td class="n">${fmt$(x.ult)}</td><td class="n ${x.dif < 0 ? "neg" : "pos"}">${fmt$(x.dif)}</td></tr>${sub}`;
+    }).join("");
+    return seccion("clientes", "Movimiento de clientes", `${esc(etP)} contra ${esc(etA)}`,
+      `<div class="sub" style="margin:0">${seg("cli-base", [["previo", "vs periodo anterior"], ["anio", "vs mismo periodo año anterior"]], base)} ${ms("cli-carts", opC, "Carteras")}</div>
+      <div class="tira"><div class="celda"><label>Clientes con compra</label><div class="valor">${activosU}</div><small>${activosA} en ${esc(etA)}</small></div>
+        <div class="celda"><label>Retención</label><div class="valor">${fmtP(div(retenidos, activosA))}</div><small>${retenidos} de ${activosA} volvieron a comprar</small></div>
+        <div class="celda"><label>Perdidos / nuevos</label><div class="valor"><span class="neg">${per("perdida").length}</span> / <span class="pos">${per("nueva").length}</span></div><small>clientes</small></div>
+        <div class="celda"><label>Crecimiento neto</label><div class="valor ${suma(filas) < 0 ? "neg" : "pos"}">${fmtS(suma(filas))}</div><small>${fmtPs(div(suma(filas), filas.reduce((s, x) => s + x.a, 0)), 1)}</small></div></div>
+      <div class="grid2">${grupos.map(lista).join("")}</div>
+      <div><div class="sub">Comparativo por cliente <span class="der" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><input type="search" class="campo" style="width:200px;padding:4px 8px" placeholder="Buscar cliente" data-busq="cli-q" id="busq-cli" value="${esc(UI.busq["cli-q"] || "")}">${seg("cli-desg", [["si", "Desglosar carteras"], ["no", "Solo total"]], desg ? "si" : "no")}${seg("cli-n", [["25", "25"], ["100", "100"], ["5000", "Todos"]], vista("cli-n", "25"))}</span></div>
+      <div class="tabla-wrap"><table class="t"><thead><tr>${th("cli-comp", "cliente", "Cliente", false)}<th>Cartera ${c.Ja}</th>${th("cli-comp", "ant", esc(etA))}${th("cli-comp", "ult", esc(etP))}${th("cli-comp", "dif", "Diferencia")}</tr></thead><tbody>${filasComp}</tbody></table></div>
+      <p class="nota-pie">${comp.length} clientes; ${multi} compran a través de más de una cartera en ${c.Ja} y se desglosan por cartera${UI.filtros["cli-carts"] ? " (solo se muestran las carteras seleccionadas)" : ""}. La venta de periodos anteriores se atribuye a la cartera que atiende al cliente este año (si la cartera anterior ya no lo atiende, va a su cartera principal).</p></div>`);
+  }
+
+  // Sin archivo de ventas por cliente: listas del Tablero (trimestre fijo) y cartera asignada a mano
+  function sClientesTablero(c) {
     const cl = clientesDe(c.Ja, c.Jm);
-    if (!cl) return seccion("clientes", "Movimiento de clientes", "", `<div class="aviso info">Sin datos de clientes.</div>`);
+    if (!cl) return seccion("clientes", "Movimiento de clientes", "", `<div class="aviso info">Sin datos de clientes. Carga el Tablero ISEL o un archivo de ventas por cliente en la pestaña Datos.</div>`);
     const d = cl.datos, li = d.listas || {};
-    const lista = (t, L, cls) => `<div><div class="sub">${t}</div><div class="tabla-wrap" style="max-height:none"><table class="t"><tbody>${(L || []).map((x, i) => `<tr><td class="mono" style="width:28px">${i + 1}</td><td>${esc(x.cliente)}</td><td class="n ${cls}">${fmt$(x.monto)}</td></tr>`).join("") || '<tr><td>Sin datos</td></tr>'}</tbody></table></div></div>`;
-    // Comparativo trimestre a trimestre
+    G.cliCart = G.cliCart || {};
+    const carteras = Object.entries(IDX.cartNom).sort();
+    const opC = [{ v: "S/C", t: "Sin asignar" }, ...carteras.map(([k, n]) => ({ v: k, t: `${k} ${n}` }))];
+    registrarMs("cli-carts", opC);
+    const cartDe = (cli) => G.cliCart[cli] || "S/C";
+    const ok = (cli) => pasa("cli-carts", cartDe(cli));
+    const celdaCart = (cli) => UI.modoEdicion
+      ? `<select class="estado-sel" data-cli-cart="${esc(cli)}" aria-label="Cartera de ${esc(cli)}"><option value="">Sin asignar</option>${carteras.map(([k, n]) => `<option value="${k}" ${G.cliCart[cli] === k ? "selected" : ""}>${k} ${esc(n)}</option>`).join("")}</select>`
+      : G.cliCart[cli] ? `<span class="cod" style="margin:0">${G.cliCart[cli]}</span> ${esc(IDX.cartNom[G.cliCart[cli]] || "")}` : '<span class="cod" style="margin:0">sin asignar</span>';
+    const lista = (t, L, cls) => { const F = (L || []).filter((x) => ok(x.cliente)); return `<div><div class="sub">${t}</div><div class="tabla-wrap" style="max-height:none"><table class="t"><thead><tr><th>#</th><th>Cliente</th><th>Cartera</th><th class="n">Monto</th></tr></thead><tbody>${F.map((x, i) => `<tr><td class="mono" style="width:28px">${i + 1}</td><td>${esc(x.cliente)}</td><td style="font-size:12.5px">${celdaCart(x.cliente)}</td><td class="n ${cls}">${fmt$(x.monto)}</td></tr>`).join("") || '<tr><td colspan="4">Sin clientes con este filtro</td></tr>'}</tbody></table></div></div>`; };
     const ant = new Map((d.top_ant || []).map((x) => [x.cliente, x.monto]));
     const q = (UI.busq["cli-q"] || "").toLowerCase();
     const comp = (d.top_ult || []).map((x) => ({ cliente: x.cliente, ult: x.monto, ant: ant.get(x.cliente) ?? 0 }));
     for (const [k, v] of ant) if (!comp.find((x) => x.cliente === k)) comp.push({ cliente: k, ult: 0, ant: v });
     comp.forEach((x) => (x.dif = x.ult - x.ant));
     ordenar("cli-comp", comp, "ult:d");
-    const vis = comp.filter((x) => !q || x.cliente.toLowerCase().includes(q)).slice(0, +vista("cli-n", "25"));
-    return seccion("clientes", "Movimiento de clientes", "¿Quiénes explican la pérdida y la ganancia de venta?",
-      `<div class="grid2">${lista(`Venta perdida · ${fmt$(d.venta_perdida)}`, li.perdida, "neg")}${lista(`Venta disminuida · ${fmt$(d.venta_disminuida)}`, li.disminuida, "neg")}${lista(`Venta aumentada · ${fmt$(d.venta_aumentada)}`, li.aumentada, "pos")}${lista(`Venta nueva · ${fmt$(d.venta_nueva)}`, li.nueva, "pos")}</div>
-      <div><div class="sub">Comparativo por cliente · trimestre anterior vs último <span class="der" style="display:flex;gap:8px;flex-wrap:wrap"><input type="search" class="campo" style="width:200px;padding:4px 8px" placeholder="Buscar cliente" data-busq="cli-q" id="busq-cli" value="${esc(UI.busq["cli-q"] || "")}">${seg("cli-n", [["25", "25"], ["100", "100"], ["2000", "Todos"]], vista("cli-n", "25"))}</span></div>
-      <div class="tabla-wrap"><table class="t"><thead><tr>${th("cli-comp", "cliente", "Cliente", false)}${th("cli-comp", "ant", "Trim. anterior")}${th("cli-comp", "ult", "Último trim.")}${th("cli-comp", "dif", "Diferencia")}</tr></thead><tbody>
-      ${vis.map((x) => `<tr><td>${esc(x.cliente)}</td><td class="n">${fmt$(x.ant)}</td><td class="n">${fmt$(x.ult)}</td><td class="n ${x.dif < 0 ? "neg" : "pos"}">${fmt$(x.dif)}</td></tr>`).join("")}</tbody></table></div>
+    const vis = comp.filter((x) => ok(x.cliente) && (!q || x.cliente.toLowerCase().includes(q))).slice(0, +vista("cli-n", "25"));
+    const p = d.periodo || {}; const f = (s) => (s ? `${+s.slice(8, 10)} ${MC[+s.slice(5, 7) - 1]} ${s.slice(0, 4)}` : "");
+    return seccion("clientes", "Movimiento de clientes", `Trimestre ${f(p.ult?.[0])}–${f(p.ult?.[1])} contra el anterior`,
+      `<div class="aviso">Estos listados vienen del Tablero ISEL y cubren un trimestre fijo, sin cartera ni fecha por cliente, así que <b>no responden al filtro de periodo</b>. Para ver la cartera de cada cliente en ${c.Ja}, desglosar clientes atendidos por varias carteras y filtrar por cualquier periodo, carga en <b>Datos</b> un reporte de ventas por cliente (SAE u Odoo) con fecha, cliente, cartera o vendedor e importe. Mientras tanto puedes asignar la cartera de cada cliente con <b>Modificar cifras</b>.</div>
+      <div class="sub" style="margin:0">${ms("cli-carts", opC, "Carteras")}</div>
+      <div class="grid2">${lista(`Venta perdida · ${fmt$(d.venta_perdida)}`, li.perdida, "neg")}${lista(`Venta disminuida · ${fmt$(d.venta_disminuida)}`, li.disminuida, "neg")}${lista(`Venta aumentada · ${fmt$(d.venta_aumentada)}`, li.aumentada, "pos")}${lista(`Venta nueva · ${fmt$(d.venta_nueva)}`, li.nueva, "pos")}</div>
+      <div><div class="sub">Comparativo por cliente · trimestre anterior vs último <span class="der" style="display:flex;gap:8px;flex-wrap:wrap"><input type="search" class="campo" style="width:200px;padding:4px 8px" placeholder="Buscar cliente" data-busq="cli-q" id="busq-cli" value="${esc(UI.busq["cli-q"] || "")}">${seg("cli-n", [["25", "25"], ["100", "100"], ["5000", "Todos"]], vista("cli-n", "25"))}</span></div>
+      <div class="tabla-wrap"><table class="t"><thead><tr>${th("cli-comp", "cliente", "Cliente", false)}<th>Cartera</th>${th("cli-comp", "ant", "Trim. anterior")}${th("cli-comp", "ult", "Último trim.")}${th("cli-comp", "dif", "Diferencia")}</tr></thead><tbody>
+      ${vis.map((x) => `<tr><td>${esc(x.cliente)}</td><td style="font-size:12.5px">${celdaCart(x.cliente)}</td><td class="n">${fmt$(x.ant)}</td><td class="n">${fmt$(x.ult)}</td><td class="n ${x.dif < 0 ? "neg" : "pos"}">${fmt$(x.dif)}</td></tr>`).join("")}</tbody></table></div>
       <p class="nota-pie">${comp.length} clientes con venta en alguno de los dos trimestres. Fuente: listados SAE pegados en el Tablero ISEL.</p></div>`);
+  }
+
+  /* ---------------------------------------------------------- Simulador */
+  function datosSimulador() {
+    const c = ctx(), a = c.Ja, cm = c.Jm;
+    const real = c.acum.log, restantes = 12 - cm;
+    let restoMeta = 0, prevMismos = 0, hayPrev = false;
+    for (let m = cm + 1; m <= 12; m++) { restoMeta += tot(a, m)?.meta || 0; const p = tot(a - 1, m)?.log ?? IDX.hist.get(`${a - 1}-${m}`); if (fin(p)) { prevMismos += p; hayPrev = true; } }
+    const ritmo = div(c.acum.log, c.acum.meta);
+    let mejor = { r: null, m: null };
+    for (let m = 1; m <= cm; m++) { const t = tot(a, m); const r = t ? div(t.log, t.meta) : null; if (fin(r) && (mejor.r === null || r > mejor.r)) mejor = { r, m }; }
+    let maxHist = { v: 0, a: null, m: null };
+    for (const h of BASE.historico || []) if (h.v > maxHist.v && (h.a < a || h.m <= cm)) maxHist = { v: h.v, a: h.a, m: h.m };
+    let totAnt = 0; for (let m = 1; m <= 12; m++) totAnt += tot(a - 1, m)?.log ?? IDX.hist.get(`${a - 1}-${m}`) ?? 0;
+    const necesario = c.mAnual - real;
+    return { c, a, cm, real, restantes, restoMeta, ritmo, mejor, maxHist, totAnt, necesario, pctNec: div(necesario, restoMeta), pctPrev: hayPrev ? div(prevMismos, restoMeta) : null, prevMismos };
+  }
+  function interpretarSimulacion(S, pct) {
+    const { c, a, cm, real, restantes, restoMeta, ritmo, mejor, maxHist, totAnt, pctNec } = S;
+    const cierre = real + restoMeta * pct, cump = div(cierre, c.mAnual), gap = cierre - c.mAnual;
+    const ventaMes = restantes ? (restoMeta * pct) / restantes : 0;
+    const promedio = real / cm;
+    const T = [];
+    T.push(`Con un cumplimiento promedio de <b>${fmtP(pct)}</b> en los ${restantes} meses que faltan (${fmtM(ventaMes)} por mes), ISEL cerraría ${a} en <b>${fmtM(cierre)}</b>, el <b>${fmtP(cump)}</b> de la meta anual de ${fmtM(c.mAnual, 1)}; ${gap >= 0 ? `la superaría por ${fmtM(gap)}` : `faltarían ${fmtM(-gap)}`}. ${totAnt ? `Contra la venta total de ${a - 1} (${fmtM(totAnt, 1)}) sería un ${cierre >= totAnt ? "crecimiento" : "decrecimiento"} de ${fmtP(Math.abs(cierre / totAnt - 1), 1)}.` : ""}`);
+    let realismo;
+    if (fin(mejor.r) && pct > mejor.r + 0.005) realismo = `Supone rendir cada mes por encima del mejor mes de ${a} (${MESES[mejor.m - 1]}, ${fmtP(mejor.r)}). Sin acciones extraordinarias es un escenario <b>poco probable</b>.`;
+    else if (fin(ritmo) && pct > ritmo + 0.05) realismo = `Exige mejorar ${fmtP(pct - ritmo)} puntos el ritmo del año (${fmtP(ritmo)}). Es <b>alcanzable solo si se corrigen</b> las causas del bloque Diagnóstico (conversión, vaciado de pendientes, generación de oportunidades).`;
+    else if (fin(ritmo) && pct >= ritmo - 0.05) realismo = `Es consistente con el ritmo de cumplimiento del año (${fmtP(ritmo)}): es el <b>escenario más probable</b> si nada cambia.`;
+    else realismo = `Está por debajo del ritmo del año (${fmtP(ritmo)}): es un escenario <b>conservador</b>, útil como piso de planeación.`;
+    T.push(realismo);
+    if (restantes > 0) {
+      const nec = S.necesario / restantes;
+      let meta = `Para cumplir la meta anual se necesita <b>${fmtP(pctNec)}</b> de cumplimiento en cada mes restante, es decir <b>${fmtM(nec)}</b> por mes: ${fmtP(nec / promedio)} del promedio mensual actual (${fmtM(promedio)})`;
+      if (maxHist.a) meta += ` y ${nec > maxHist.v ? "más que" : "cerca de"} la venta mensual más alta registrada (${fmtM(maxHist.v)}, ${MESES[maxHist.m - 1]} ${maxHist.a})`;
+      meta += ".";
+      if (pctNec > 1.2) meta += ` Con los datos actuales la meta anual <b>no es alcanzable de forma realista</b>; conviene acordar un objetivo de cierre intermedio y medir cada mes la recuperación contra ese objetivo.`;
+      else if (pctNec > 1) meta += ` La meta todavía es posible, pero requiere superar la meta de cada mes que falta.`;
+      else meta += ` Basta con mantener un cumplimiento mensual de ${fmtP(pctNec)}.`;
+      T.push(meta);
+    }
+    return { cierre, cump, gap, ventaMes, textos: T };
+  }
+  function sSimulador() {
+    const S = datosSimulador(), C = colores();
+    const { c, a, cm, real, restantes, restoMeta, ritmo, mejor, pctNec, pctPrev } = S;
+    if (!restantes) return seccion("simulador", "Simulador de cierre", `${a} ya cerró`, `<div class="aviso info">Con ${MESES[cm - 1]} seleccionado no quedan meses por simular. Cierre: ${fmtM(real)} (${fmtP(div(real, c.mAnual))} de la meta anual).</div>`);
+    const pctUI = UI.vistas["sim-pct"] != null ? +UI.vistas["sim-pct"] / 100 : Math.round((ritmo || 0.8) * 100) / 100;
+    const I = interpretarSimulacion(S, pctUI);
+    const refs = [
+      ["Ritmo del año", ritmo], [`Igual que ${MC[cm]}–Dic ${a - 1}`, pctPrev], [`Mejor mes ${a}`, mejor.r], ["Lo necesario para la meta", pctNec],
+    ].filter((x) => fin(x[1]));
+    const escen = [...refs.map(([t, p]) => ({ t, p })), { t: "Tu escenario", p: pctUI }].sort((x, y) => x.p - y.p);
+    chart("g-sim", { type: "bar", data: { labels: escen.map((x) => `${x.t} · ${fmtP(x.p)}`), datasets: [{ label: "Cierre anual", data: escen.map((x) => real + restoMeta * x.p), backgroundColor: escen.map((x) => { const cc = real + restoMeta * x.p; const col = cc >= c.mAnual ? C.ok : cc >= c.mAnual * 0.9 ? C.warn : C.bad; return x.t === "Tu escenario" ? col : alfa(col, 0.45); }), borderColor: escen.map((x) => (x.t === "Tu escenario" ? C.ink : "transparent")), borderWidth: 2 }, { type: "line", label: "Meta anual", data: escen.map(() => c.mAnual), borderColor: C.ink2, borderDash: [5, 4], pointRadius: 0 }] }, options: { scales: { y: ejeM({ beginAtZero: true }), x: { grid: { display: false }, ticks: { font: { size: 11 } } } }, plugins: { tooltip: { callbacks: { label: tipM, afterBody: (it) => it[0].datasetIndex === 0 ? `${fmtP((real + restoMeta * escen[it[0].dataIndex].p) / c.mAnual)} de la meta anual` : "" } } } } });
+    return seccion("simulador", "Simulador de cierre", `¿Cómo cerraría ${a} según el cumplimiento de los meses que faltan?`,
+      `<div class="grid2"><div style="display:flex;flex-direction:column;gap:12px">
+        <label class="campo-label" for="sim-pct">Cumplimiento esperado de ${MC[cm]} a Dic: <b class="mono" style="font-size:15px">${fmtP(pctUI, pctUI * 100 % 1 ? 1 : 0)}</b></label>
+        <input type="range" id="sim-pct" min="40" max="180" step="0.5" value="${Math.round(pctUI * 1000) / 10}" data-sim>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">${refs.map(([t, p]) => `<button class="btn chico" data-sim-ref="${Math.ceil(p * 1000) / 10}" type="button">${esc(t)} · ${fmtP(p)}</button>`).join("")}</div>
+        <div class="tira" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+          <div class="celda"><label>Venta real a ${MC[cm - 1]}</label><div class="valor">${fmtM(real)}</div><small>${fmtP(ritmo)} de cumplimiento acumulado</small></div>
+          <div class="celda"><label>Meta ${MC[cm]}–Dic</label><div class="valor">${fmtM(restoMeta)}</div><small>${restantes} meses</small></div>
+          <div class="celda"><label>Cierre proyectado</label><div class="valor ${I.gap >= 0 ? "pos" : "neg"}">${fmtM(I.cierre)}</div><small>${fmtP(I.cump)} de la meta anual · ${fmtS(I.gap)}</small></div>
+          <div class="celda"><label>Para llegar a la meta</label><div class="valor">${fmtP(pctNec)}</div><small>de cumplimiento cada mes (${fmtM(S.necesario / restantes)}/mes)</small></div>
+        </div></div>
+        <div><div class="graf"><canvas id="g-sim" role="img" aria-label="Escenarios de cierre anual"></canvas></div><p class="nota-pie">Barra marcada: el escenario de la barra deslizante. Las demás son referencias calculadas con los datos.</p></div></div>
+      <div class="interpretacion"><div class="sub">Lectura del escenario</div>${I.textos.map((t) => `<p>${t}</p>`).join("")}</div>`);
+  }
+
+  /* ------------------------------------------------- Análisis general de ISEL */
+  const filasTxt = (t, ancho) => Math.max(2, Math.min(10, Math.ceil(String(t || "").length / ancho) + 1));
+  const SEV = { critico: ["Crítico", "bad"], alto: ["Alto", "warn"], medio: ["Medio", "na"] };
+  function generarAnalisis() {
+    const c = ctx(), a = c.Ja, m = c.Jm, Lac = acumDe(a, m);
+    const H = [], E = [], P = [];
+    const cumA = div(c.acum.log, c.acum.meta), avance = div(c.acum.log, c.mAnual);
+    const restantes = 12 - m, falta = c.mAnual - c.acum.log, prom = c.acum.log / m;
+    const nec = restantes ? falta / restantes : null;
+    const d = diagnosticoAuto();
+    const S = datosSimulador();
+    const cierreRitmo = restantes ? c.acum.log + S.restoMeta * (S.ritmo || 0) : c.acum.log;
+    const fecha = (dias) => isoLocal(new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate() + dias));
+    const plan = (accion, indicador, meta, dias = 30) => P.push({ accion, responsable: "", fecha: fecha(dias), indicador, meta, estado: "pendiente" });
+    // 1. Avance contra la meta
+    H.push({ sev: cumA < 0.85 ? "critico" : cumA < 0.95 ? "alto" : "medio", titulo: `Avance anual: ${fmtP(cumA)} de la meta a ${MC[m - 1]}`,
+      texto: `Venta acumulada ${fmtM(c.acum.log)} contra ${fmtM(c.acum.meta)} (déficit ${fmtM(c.acum.log - c.acum.meta)}). Llevamos ${fmtP(avance)} de la meta anual de ${fmtM(c.mAnual, 1)}${restantes ? `; para cumplirla faltan ${fmtM(falta)}, ${fmtM(nec)} por mes, ${fmtP(div(nec, prom))} del promedio mensual actual. Al ritmo del año el cierre sería de ${fmtM(cierreRitmo)} (${fmtP(div(cierreRitmo, c.mAnual))}).` : "."}` });
+    // 2. Tendencia del déficit
+    const W = (BASE.semanal || []).filter((w) => w.a === a && w.venta_acum !== null && +w.fecha.slice(5, 7) <= m);
+    if (W.length > 3) {
+      const ds = W.slice(1).map((w, i) => (w.venta_acum - w.meta_acum) - (W[i].venta_acum - W[i].meta_acum));
+      const amp = ds.filter((x) => x < 0).length;
+      H.push({ sev: amp / ds.length > 0.7 ? "critico" : amp / ds.length > 0.5 ? "alto" : "medio", titulo: `El déficit se amplió en ${amp} de ${ds.length} semanas`,
+        texto: `En ${MESES[m - 1]} ${d.estado} (${fmtS(d.delta)}). El ritmo semanal no está cerrando la brecha: la organización vende de forma constante por debajo de la meta semanal en lugar de tener meses aislados malos.` });
+    }
+    // 3. Conversión y pipeline
+    const ke = kpi(a, m, "efectividad"), km = kpi(a, m, "margen"), kp = kpi(a, m, "pendientes"), kpm = kpi(a, m, "pendientes_monto"), kc = kpi(a, m, "cotizaciones");
+    if (fin(ke.v) && fin(ke.meta)) {
+      const r = ke.v / ke.meta;
+      H.push({ sev: r < 0.6 ? "critico" : r < 0.85 ? "alto" : "medio", titulo: `Efectividad de cierre en ${fmtP(ke.v, 1)} contra ${fmtP(ke.meta)}`,
+        texto: `Con ${fmtM(kc.v)} cotizados y margen de seguridad de ${fmtX(km.v)} (meta ${fmtX(km.meta)}), el problema principal no es la falta de oportunidades sino su conversión. Cada punto de efectividad sobre el pipeline actual equivale a cerca de ${fmtM((kc.v || 0) * 0.01)} de venta.` });
+      if (r < 0.85) {
+        E.push("Conversión: revisar cada semana, por cartera, las oportunidades en Propuesta y Negociación con monto, fecha de cierre y siguiente paso; priorizar las de mayor monto y probabilidad.");
+        plan("Revisión semanal de oportunidades en Propuesta / Negociación por cartera, con plan de cierre de las 10 de mayor monto", "Efectividad de cierre", `Subir de ${fmtP(ke.v, 0)} a ${fmtP(Math.min(ke.meta, ke.v + 0.05), 0)} en 60 días`, 60);
+      }
+    }
+    if (fin(km.v) && fin(km.meta) && km.v < km.meta) {
+      E.push("Generación de oportunidades: sostener el margen de seguridad arriba de la meta con prospección dirigida a oportunidades mayores a $20 mil.");
+      plan("Generar oportunidades nuevas mayores a $20 mil por cartera", "Margen de seguridad", `≥ ${fmtX(km.meta)}`);
+    }
+    if (fin(kp.v) && fin(kp.meta) && kp.v < kp.meta * 0.8) {
+      H.push({ sev: kp.v < 0.6 ? "alto" : "medio", titulo: `Vaciado de pendientes por surtir en ${fmtP(kp.v)}`,
+        texto: `Hay ${fmtM(kpm.v)} disponibles para facturar, equivalentes a ${fmtP(div(kpm.v, c.per.meta / c.L.length))} de la meta mensual. Es venta que ya está ganada y que se puede facturar sin vender más.` });
+      E.push("Pendientes por surtir: vaciado diario de lo disponible, con responsable por cartera y revisión de pedidos detenidos por crédito, documentación o logística.");
+      plan("Vaciado diario de pendientes disponibles por facturar y reporte de bloqueos", "% de vaciado de pendientes", `≥ 90% del disponible`, 15);
+    }
+    // 4. Carteras
+    const cart = tablaDim("cartera", Lac).filter((x) => x.meta > 0);
+    const peores = [...cart].sort((x, y) => x.desv - y.desv).slice(0, 3);
+    const defTot = cart.filter((x) => x.desv < 0).reduce((s, x) => s + x.desv, 0);
+    const rez = cart.filter((x) => x.cumpl < 0.5 && x.meta > 500000);
+    if (peores.length) {
+      const sp = peores.reduce((s, x) => s + x.desv, 0);
+      H.push({ sev: div(sp, defTot) > 0.4 ? "alto" : "medio", titulo: `Tres carteras explican ${fmtP(div(sp, defTot))} del déficit acumulado`,
+        texto: `${peores.map((x) => `${x.k} ${x.n} (${fmtM(x.desv)}, ${fmtP(x.cumpl)})`).join("; ")}.${rez.length ? ` Además, ${rez.length} carteras con meta relevante van debajo de 50%: ${rez.map((x) => `${x.k} ${x.n.split(" ")[0]} ${fmtP(x.cumpl)}`).join(", ")}.` : ""}` });
+      E.push(`Carteras: plan de recuperación individual para ${peores.map((x) => x.k + " " + x.n.split(" ")[0]).join(", ")}, con meta de recuperación mensual y revisión quincenal con el gerente.`);
+      peores.forEach((x) => plan(`Plan de recuperación de la cartera ${x.k} ${x.n}: cuentas objetivo, pipeline mínimo y seguimiento quincenal`, `Cumplimiento ${x.k}`, `De ${fmtP(x.cumpl)} a ${fmtP(Math.min(1, (x.cumpl || 0) + 0.1))} acumulado`, 45));
+    }
+    // 5. Líneas
+    const lin = tablaDim("linea", Lac).filter((x) => x.meta > 0);
+    const tl = lin.reduce((s, x) => s + Math.max(0, x.log), 0);
+    const top = [...lin].sort((x, y) => y.log - x.log)[0];
+    const lPeores = [...lin].sort((x, y) => x.desv - y.desv).slice(0, 3);
+    const sinVenta = lin.filter((x) => x.cumpl < 0.3 && x.meta > 500000);
+    if (top) H.push({ sev: div(top.log, tl) > 0.5 ? "alto" : "medio", titulo: `${top.n} concentra ${fmtP(div(top.log, tl))} de la venta`,
+      texto: `Las líneas con mayor desviación son ${lPeores.map((x) => `${x.n} (${fmtM(x.desv)}, ${fmtP(x.cumpl)})`).join(", ")}.${sinVenta.length ? ` Con meta pero casi sin venta: ${sinVenta.map((x) => `${x.n} ${fmtP(x.cumpl)}`).join(", ")}.` : ""} La dependencia de una sola marca hace que cualquier caída en ella mueva todo el resultado.` });
+    if (lPeores.length) {
+      E.push(`Portafolio: definir pipeline mínimo por marca para ${lPeores.map((x) => x.n).join(", ")}${sinVenta.length ? ` y decidir si las metas de ${sinVenta.map((x) => x.n).join(", ")} siguen vigentes o se reasignan` : ""}.`);
+      plan(`Pipeline mínimo y responsables por marca para ${lPeores.map((x) => x.n).join(", ")}`, "Venta por línea", "Cerrar 20% de la brecha de cada línea en el trimestre", 60);
+    }
+    // 6. Clientes
+    const cl = clientesDe(a, m);
+    if (cl && cl.datos.retencion) {
+      const x = cl.datos;
+      const caida = x.trim_ant && x.trim_ult ? x.trim_ult.clientes - x.trim_ant.clientes : null;
+      H.push({ sev: x.retencion.pct_cli < 0.6 ? "alto" : "medio", titulo: `Retención de clientes en ${fmtP(x.retencion.pct_cli)} (${fmtP(x.retencion.pct_monto)} del monto)`,
+        texto: `${x.perdida?.clientes ?? "—"} clientes dejaron de comprar (${fmtM(-Math.abs(x.venta_perdida || 0))}) y la venta disminuida suma ${fmtM(x.venta_disminuida)}; la ganancia y la venta nueva no compensan del todo${fin(caida) ? `. Clientes activos: ${x.trim_ult.clientes} (${caida >= 0 ? "+" : ""}${caida} vs el trimestre anterior)` : ""}. Principales clientes perdidos o a la baja: ${[...(x.listas?.disminuida || []).slice(0, 3), ...(x.listas?.perdida || []).slice(0, 2)].map((z) => z.cliente).join(", ")}.` });
+      E.push("Clientes: campaña de recuperación de los principales clientes perdidos y disminuidos, con visita del vendedor y del gerente en los 10 de mayor monto.");
+      plan("Visitar y diagnosticar los 10 clientes con mayor venta perdida o disminuida", "Retención de clientes (monto)", `≥ ${fmtP(Math.min(0.7, x.retencion.pct_monto + 0.07))}`, 45);
+    }
+    // 7. Crecimiento
+    if (c.acumAnt && c.acumAnt.log) {
+      const cr = c.acum.log / c.acumAnt.log - 1, crP = c.perAnt && c.perAnt.log ? c.per.log / c.perAnt.log - 1 : null;
+      H.push({ sev: cr < 0 ? "alto" : "medio", titulo: `Crecimiento acumulado ${fmtPs(cr, 1)} contra ${a - 1}`,
+        texto: `El acumulado ${cr >= 0 ? "sí supera" : "queda debajo de"} ${a - 1}${fin(crP) ? `, pero ${esc(c.etiqueta)} quedó ${fmtPs(crP, 1)} contra el mismo periodo del año pasado` : ""}. La meta ${a} pedía crecer ${fmtP(div(c.mAnual, S.totAnt) - 1, 0)} sobre ${a - 1}, así que crecer ${fmtPs(cr, 1)} no es suficiente.` });
+    }
+    // 8. Pronóstico
+    const [Na, Nm] = m === 12 ? [a + 1, 1] : [a, m + 1];
+    const metaN = tot(Na, Nm)?.meta;
+    if (fin(metaN)) {
+      const r = div(prom, metaN);
+      H.push({ sev: r < 0.8 ? "alto" : "medio", titulo: `${MESES[Nm - 1]} arranca con meta de ${fmtM(metaN)}`,
+        texto: `Con el promedio mensual del año (${fmtM(prom)}) se llegaría a ${fmtP(r)}. Lo disponible por facturar (${fmtM(kpm.v)}) y el pipeline (${fmtM(kc.v)}) son la palanca de corto plazo.` });
+    }
+    if (restantes && S.pctNec > 1.1) {
+      E.push(`Meta: acordar con dirección un objetivo de cierre ${a} realista (por ejemplo ${fmtM(cierreRitmo)} al ritmo actual, o el escenario que se defina en el simulador) y medir cada junta la recuperación contra ese objetivo.`);
+      plan(`Acordar objetivo de cierre ${a} y meta de recuperación mensual`, "Cumplimiento acumulado", `Definir en la junta`, 7);
+    }
+    const ord = { critico: 0, alto: 1, medio: 2 };
+    H.sort((x, y) => ord[x.sev] - ord[y.sev]);
+    const crit = H.filter((h) => h.sev === "critico").length;
+    const situacion = `Al cierre de ${MESES[m - 1]} ${a}, ISEL acumula ${fmtM(c.acum.log)}, ${fmtP(cumA)} de la meta a la fecha y ${fmtP(avance)} de la meta anual, con un déficit de ${fmtM(Math.abs(c.acum.log - c.acum.meta))} que ${d.delta < 0 ? "se sigue ampliando" : "empezó a reducirse"}. ${c.acumAnt && c.acumAnt.log ? `La venta crece ${fmtPs(c.acum.log / c.acumAnt.log - 1, 1)} contra ${a - 1}, insuficiente para la meta planteada. ` : ""}Los indicadores apuntan a que la brecha se origina sobre todo en la conversión del pipeline${fin(kp.v) && kp.v < 0.8 ? " y en el vaciado de pendientes por surtir" : ""}, más que en la falta de oportunidades. ${crit ? `Hay ${crit} ${crit === 1 ? "tema crítico" : "temas críticos"} que requieren decisión en esta junta.` : ""}`;
+    return { generado: new Date().toISOString(), periodo: c.clave, situacion, hallazgos: H, enfoque: E, plan: P.slice(0, 8) };
+  }
+  function sGeneral() {
+    const c = ctx();
+    G.analisis = G.analisis || {};
+    let A = G.analisis[c.clave];
+    if (!A) { A = G.analisis[c.clave] = generarAnalisis(); guardar(); }
+    const fechaGen = new Date(A.generado).toLocaleString("es-MX", { dateStyle: "medium", timeStyle: "short" });
+    const hall = A.hallazgos.map((h, i) => `<div class="hallazgo ${SEV[h.sev]?.[1] || "na"}"><div class="hallazgo-cab"><select class="estado-sel" data-an="hallazgos" data-i="${i}" data-campo="sev" aria-label="Severidad">${Object.entries(SEV).map(([k, [t]]) => `<option value="${k}" ${h.sev === k ? "selected" : ""}>${t}</option>`).join("")}</select>
+        <input class="campo titulo" data-an="hallazgos" data-i="${i}" data-campo="titulo" value="${esc(h.titulo)}" aria-label="Título del hallazgo"><button class="restaurar" data-an-borrar="hallazgos" data-i="${i}" type="button" title="Quitar">✕</button></div>
+        <textarea class="campo" data-an="hallazgos" data-i="${i}" data-campo="texto" rows="${filasTxt(h.texto, 140)}" aria-label="Detalle">${esc(h.texto)}</textarea></div>`).join("");
+    const enf = A.enfoque.map((t, i) => `<li><textarea class="campo" data-an="enfoque" data-i="${i}" rows="${filasTxt(t, 120)}" aria-label="Sugerencia ${i + 1}">${esc(t)}</textarea><button class="restaurar" data-an-borrar="enfoque" data-i="${i}" type="button" title="Quitar">✕</button></li>`).join("");
+    const plan = `<div class="tabla-wrap" style="max-height:none"><table class="t compromisos"><thead><tr><th>#</th><th>Acción</th><th>Responsable</th><th>Fecha</th><th>Indicador</th><th>Meta / resultado esperado</th><th>Estado</th><th></th></tr></thead><tbody>
+      ${A.plan.map((p, i) => `<tr><td class="mono">${i + 1}</td><td style="min-width:280px"><textarea rows="${filasTxt(p.accion, 45)}" data-an="plan" data-i="${i}" data-campo="accion" aria-label="Acción">${esc(p.accion)}</textarea></td><td><input data-an="plan" data-i="${i}" data-campo="responsable" value="${esc(p.responsable)}" aria-label="Responsable"></td><td><input type="date" data-an="plan" data-i="${i}" data-campo="fecha" value="${esc(p.fecha)}" aria-label="Fecha"></td><td style="min-width:160px"><textarea rows="${filasTxt(p.indicador, 22)}" data-an="plan" data-i="${i}" data-campo="indicador" aria-label="Indicador">${esc(p.indicador)}</textarea></td><td style="min-width:180px"><textarea rows="${filasTxt(p.meta, 30)}" data-an="plan" data-i="${i}" data-campo="meta" aria-label="Meta">${esc(p.meta)}</textarea></td>
+      <td><select class="estado-sel ${p.estado}" data-an="plan" data-i="${i}" data-campo="estado" aria-label="Estado">${ESTADOS.map(([v, t]) => `<option value="${v}" ${p.estado === v ? "selected" : ""}>${t}</option>`).join("")}</select></td>
+      <td style="white-space:nowrap"><button class="btn chico" data-an-comp="${i}" type="button" title="Agregar a los compromisos de la junta">→ Compromiso</button> <button class="restaurar" data-an-borrar="plan" data-i="${i}" type="button" title="Quitar">✕</button></td></tr>`).join("")}</tbody></table></div>`;
+    return seccion("general", "Análisis general de ISEL", `Situación al cierre de ${MESES[c.Jm - 1]} ${c.Ja}: lo más crítico, enfoque y plan`,
+      `<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center"><span class="nota-pie" style="margin:0">Borrador generado el ${esc(fechaGen)} con todos los datos disponibles. Todo es editable y se guarda al escribir.</span>
+        <span style="margin-left:auto;display:flex;gap:8px"><button class="btn chico" data-copiar="b-general-texto" type="button">Copiar resumen</button><button class="btn chico ${UI.confirmar === "an" ? "peligro" : ""}" data-an-regenerar type="button">${UI.confirmar === "an" ? "Confirmar: reemplazar lo editado" : "Regenerar con datos actuales"}</button></span></div>
+      <div><div class="sub">Situación general</div><textarea class="campo" data-an="situacion" rows="${filasTxt(A.situacion, 150) + 1}" id="an-situacion" aria-label="Situación general">${esc(A.situacion)}</textarea></div>
+      <div><div class="sub">Hallazgos ordenados por importancia <span class="der"><button class="btn chico" data-an-nuevo="hallazgos" type="button">+ Hallazgo</button></span></div><div class="hallazgos">${hall}</div></div>
+      <div><div class="sub">Sugerencias de enfoque <span class="der"><button class="btn chico" data-an-nuevo="enfoque" type="button">+ Sugerencia</button></span></div><ol class="enfoque">${enf}</ol></div>
+      <div><div class="sub">Plan de acción propuesto <span class="der"><button class="btn chico" data-an-nuevo="plan" type="button">+ Acción</button></span></div>${plan}<p class="nota-pie">→ Compromiso copia la acción a los compromisos de la junta de ${MESES[c.Jm - 1]} (bloque 08).</p></div>
+      <div id="b-general-texto" hidden>${esc(textoAnalisis(A))}</div>`);
+  }
+  function textoAnalisis(A) {
+    const c = ctx();
+    return [`ANÁLISIS GENERAL ISEL · ${MESES[c.Jm - 1]} ${c.Ja}`, "", "Situación general", A.situacion, "", "Hallazgos",
+      ...A.hallazgos.map((h, i) => `${i + 1}. [${SEV[h.sev]?.[0] || h.sev}] ${h.titulo}\n   ${h.texto}`), "", "Sugerencias de enfoque", ...A.enfoque.map((t, i) => `${i + 1}. ${t}`), "", "Plan de acción",
+      ...A.plan.map((p, i) => `${i + 1}. ${p.accion} | Resp.: ${p.responsable || "—"} | ${p.fecha || "—"} | ${p.indicador}: ${p.meta}`)].join("\n");
   }
 
   function sTipo() {
@@ -881,29 +1190,6 @@
       <p class="nota-pie">Claves de clasificación de SAE (UF, UFE, IN, DAR…). "(sin clasificar)": clientes sin clave en el catálogo.</p>`);
   }
 
-  function sSimulador() {
-    const c = ctx(), C = colores();
-    const a = c.Ja, cm = c.Jm;
-    const pct = +(UI.vistas["sim-pct"] || 85) / 100;
-    const real = c.acum.log;
-    let restoMeta = 0; for (let m = cm + 1; m <= 12; m++) restoMeta += tot(a, m)?.meta || 0;
-    const cierre = real + restoMeta * pct;
-    const necesario = c.mAnual - real;
-    const pctNec = div(necesario, restoMeta);
-    const esc_ = [0.7, 0.8, 0.9, 1, 1.1].map((p) => ({ p, cierre: real + restoMeta * p }));
-    chart("g-sim", { type: "bar", data: { labels: esc_.map((x) => fmtP(x.p)), datasets: [{ label: "Cierre anual", data: esc_.map((x) => x.cierre), backgroundColor: esc_.map((x) => (x.cierre >= c.mAnual ? C.ok : x.cierre >= c.mAnual * 0.9 ? C.warn : C.bad)) }, { type: "line", label: "Meta anual", data: esc_.map(() => c.mAnual), borderColor: C.ink2, borderDash: [5, 4], pointRadius: 0 }] }, options: { scales: { y: ejeM({ beginAtZero: true }), x: { grid: { display: false }, title: { display: true, text: "Cumplimiento promedio de los meses restantes" } } }, plugins: { tooltip: { callbacks: { label: tipM } } } } });
-    return seccion("simulador", "Simulador de cierre", `¿Cómo cerraría ${a} según el cumplimiento de los meses que faltan?`,
-      `<div class="grid2"><div style="display:flex;flex-direction:column;gap:12px">
-        <label class="campo-label" for="sim-pct">Cumplimiento esperado de ${MC[Math.min(11, cm)]} a Dic: <b class="mono" style="font-size:14px">${fmtP(pct)}</b></label>
-        <input type="range" id="sim-pct" min="50" max="130" step="1" value="${Math.round(pct * 100)}" data-sim>
-        <div class="tira" style="grid-template-columns:repeat(2,minmax(0,1fr))">
-          <div class="celda"><label>Venta real a ${MC[cm - 1]}</label><div class="valor">${fmtM(real)}</div></div>
-          <div class="celda"><label>Meta de meses restantes</label><div class="valor">${fmtM(restoMeta)}</div></div>
-          <div class="celda"><label>Cierre proyectado</label><div class="valor ${cierre >= c.mAnual ? "pos" : "neg"}">${fmtM(cierre)}</div><small>${fmtP(div(cierre, c.mAnual))} de la meta anual</small></div>
-          <div class="celda"><label>Para llegar a la meta</label><div class="valor">${fmtP(pctNec)}</div><small>de cumplimiento en cada mes restante (${fmtM(12 - cm > 0 ? necesario / (12 - cm) : null)}/mes)</small></div>
-        </div></div>
-        <div class="graf"><canvas id="g-sim" role="img" aria-label="Escenarios de cierre anual"></canvas></div></div>`);
-  }
 
   /* ===================================================================== */
   /*                                 DATOS                                  */
@@ -920,8 +1206,10 @@
     return `<section class="bloque"><header><h2>Datos de la página</h2><span class="pregunta">Fuentes, actualización mensual y respaldo</span></header><div class="bloque-cuerpo">
       <div class="grid2"><div><div class="sub">Cargar reportes de Excel</div>
         <p style="margin:0 0 10px">Cada mes selecciona el <b>Resultado de ventas</b> del año y el <b>Tablero ISEL</b> actualizados (.xlsm o .xlsx). La página reconoce cada archivo por sus hojas y reemplaza solo lo que trae ese archivo; lo demás se conserva.</p>
+        <p style="margin:0 0 10px">Para el análisis de clientes por cartera y por periodo, agrega un <b>reporte de ventas por cliente</b> de SAE u Odoo (Excel o CSV) con columnas de <b>fecha</b>, <b>cliente</b>, <b>cartera o vendedor</b> e <b>importe</b> (venta neta, subtotal o importe). Puede abarcar varios meses; se reemplazan solo los meses que trae. ${hayVC() ? `<b>Cargado:</b> ${new Set(BASE.ventasCliente.filas.map((f) => f[2])).size} clientes, ${new Set(BASE.ventasCliente.filas.map((f) => f[0] * 100 + f[1])).size} meses.` : ""}</p>
+        <details id="sin-fecha-det"><summary class="campo-label" style="cursor:pointer">Si el reporte de clientes no trae fecha</summary><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px"><label for="mes-sin-fecha" style="font-size:13px">Todo el archivo corresponde a</label><select class="campo" id="mes-sin-fecha" style="width:auto">${MESES.map((n, i) => `<option value="${i + 1}" ${i + 1 === ctx().Jm ? "selected" : ""}>${n}</option>`).join("")}</select><select class="campo" id="anio-sin-fecha" style="width:auto">${[...new Set([...IDX.anios, hoy.getFullYear()])].map((a) => `<option ${a === ctx().Ja ? "selected" : ""}>${a}</option>`).join("")}</select></div></details>
         <label class="btn prim" for="archivos-excel" style="width:max-content">Elegir archivos de Excel</label>
-        <input type="file" id="archivos-excel" accept=".xlsx,.xlsm,.xls" multiple hidden>
+        <input type="file" id="archivos-excel" accept=".xlsx,.xlsm,.xls,.csv" multiple hidden>
         <p class="nota-pie" id="estado-carga">Las cifras se leen tal como quedaron calculadas la última vez que se guardó el Excel.</p>
         <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-top:6px"><input type="checkbox" id="limpiar-ed" checked> Al cargar, descartar las cifras modificadas a mano de los años que traiga el archivo</label>
       </div><div><div class="sub">Fuentes en uso</div>
@@ -967,14 +1255,55 @@
   function indice(lista, pref) {
     return `<nav class="indice" aria-label="Bloques">${lista.map(([id, n, t, q]) => `<a href="#b-${id}" data-ir="${id}"><b>${n}</b><span>${t}</span>${q ? `<small>${q}</small>` : ""}</a>`).join("")}</nav>`;
   }
+  const BLOQ_FN = [bSeguimiento, bMarcador, bTendencia, bContribucion, bDiagnostico, bSalud, bPortafolio, bPronostico, bAccion, bOtros];
+  const SECC_FN = [sGeneral, sHistorico, sAnual, sCalor, sMezcla, sConcentracion, sClientes, sTipo, sSimulador];
+  const listaFoco = () => (UI.tab === "junta" ? BLOQUES.map((b, i) => ({ id: b[0], n: b[1], t: b[2], fn: BLOQ_FN[i] })) : SECC2.map((b, i) => ({ id: b[0], n: String.fromCharCode(65 + i), t: b[1], fn: SECC_FN[i] })));
+  function botonAmpliar(id) {
+    if (UI.foco) return "";
+    return `<button class="btn chico ampliar" data-foco="${id}" type="button" title="Ver este módulo en grande">⤢ Ampliar</button>`;
+  }
+  function renderFoco() {
+    const L = listaFoco(); const i = L.findIndex((x) => x.id === UI.foco);
+    if (i < 0) { UI.foco = null; return false; }
+    const x = L[i], ant = L[i - 1], sig = L[i + 1];
+    const urlPestana = location.href.split("#")[0] + "#ver-" + x.id;
+    let cuerpo;
+    try { cuerpo = x.fn(); } catch (e) { console.error(e); cuerpo = `<div class="aviso">No se pudo armar este módulo: ${esc(e.message)}</div>`; }
+    document.getElementById("app").innerHTML = `<div class="pres" role="dialog" aria-label="${esc(x.t)} en grande">
+      <div class="pres-barra">
+        <button class="btn chico" data-pres-ir="${ant ? ant.id : ""}" ${ant ? "" : "disabled"} type="button" title="Módulo anterior (←)">◀ ${ant ? esc(ant.t) : ""}</button>
+        <span class="pres-titulo"><b>${x.n}</b> ${esc(x.t)} · <span class="mono">${esc(ctx().etiqueta)}</span></span>
+        <button class="btn chico" data-pres-ir="${sig ? sig.id : ""}" ${sig ? "" : "disabled"} type="button" title="Módulo siguiente (→)">${sig ? esc(sig.t) : ""} ▶</button>
+        <span class="pres-der">
+          <button class="btn chico" data-modo-ed aria-pressed="${UI.modoEdicion}" type="button">${UI.modoEdicion ? "✎ Modificando" : "✎ Modificar"}</button>
+          <button class="btn chico" data-pres-full type="button">${document.fullscreenElement ? "Salir de pantalla completa" : "⛶ Pantalla completa"}</button>
+          ${window.SIN_DESCARGAS ? "" : `<a class="btn chico" href="${esc(urlPestana)}" target="_blank" rel="noopener">↗ Abrir en otra pestaña</a>`}
+          <button class="btn chico prim" data-pres-cerrar type="button" title="Cerrar (Esc)">✕ Cerrar</button>
+        </span>
+      </div>
+      <div class="pres-cuerpo">${cuerpo}</div></div>`;
+    document.body.classList.add("en-pres");
+    return true;
+  }
   function render() {
     CTX = null; PEND = [];
+    if (UI.foco) {
+      const sc = $(".pres") ? $(".pres").scrollTop : 0;
+      const focoId0 = document.activeElement && document.activeElement.id;
+      if (renderFoco()) {
+        baseChart(); PEND.forEach((f) => { try { f(); } catch (e) { console.error(e); } });
+        $(".pres").scrollTop = sc;
+        if (focoId0) { const el = document.getElementById(focoId0); if (el) el.focus(); }
+        return;
+      }
+    }
+    document.body.classList.remove("en-pres");
     const scroll = window.scrollY;
     const focoId = document.activeElement && document.activeElement.id;
     let cuerpo;
     try {
-      if (UI.tab === "junta") cuerpo = `<div class="wrap">${indice(BLOQUES)}<main class="lienzo">${[bSeguimiento, bMarcador, bTendencia, bContribucion, bDiagnostico, bSalud, bPortafolio, bPronostico, bAccion, bOtros].map((f) => f()).join("")}</main></div>`;
-      else if (UI.tab === "analisis") cuerpo = `<div class="wrap">${indice(SECC2.map(([id, t], i) => [id, String.fromCharCode(65 + i), t, ""]))}<main class="lienzo"><div class="aviso info">Información de apoyo que no forma parte del orden de la junta. Usa el mismo periodo de la barra superior.</div>${[sHistorico, sAnual, sCalor, sMezcla, sConcentracion, sClientes, sTipo, sSimulador].map((f) => f()).join("")}</main></div>`;
+      if (UI.tab === "junta") cuerpo = `<div class="wrap">${indice(BLOQUES)}<main class="lienzo">${BLOQ_FN.map((f) => f()).join("")}</main></div>`;
+      else if (UI.tab === "analisis") cuerpo = `<div class="wrap">${indice(SECC2.map(([id, t], i) => [id, String.fromCharCode(65 + i), t, ""]))}<main class="lienzo"><div class="aviso info">Información de apoyo que no forma parte del orden de la junta. Usa el mismo periodo de la barra superior.</div>${SECC_FN.map((f) => f()).join("")}</main></div>`;
       else cuerpo = `<div class="wrap sin-indice"><main class="lienzo">${vistaDatos()}</main></div>`;
     } catch (e) {
       console.error(e);
@@ -995,6 +1324,27 @@
     links.forEach((a) => a.classList.toggle("activo", a === (act || links[0])));
   }
   window.addEventListener("scroll", () => requestAnimationFrame(marcarIndice), { passive: true });
+  function cerrarFoco() {
+    const id = UI.foco; UI.foco = null;
+    if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
+    if (location.hash.startsWith("#ver-")) try { history.replaceState(null, "", location.pathname + location.search); } catch (e) {}
+    render();
+    const s = document.getElementById("b-" + id); if (s) s.scrollIntoView({ block: "start" });
+  }
+  // Vuelve a dibujar un solo módulo (para controles que cambian muy seguido)
+  function rerender(id, fn) {
+    const el = document.getElementById("b-" + id);
+    if (!el) { render(); return; }
+    CTX = null; PEND = [];
+    const foco = document.activeElement && document.activeElement.id;
+    const tmp = document.createElement("div"); tmp.innerHTML = fn();
+    el.replaceWith(tmp.firstElementChild);
+    PEND.forEach((f) => { try { f(); } catch (e) { console.error(e); } });
+    if (foco) { const x = document.getElementById(foco); if (x) x.focus(); }
+  }
+  let resizeT = null;
+  window.addEventListener("resize", () => { if (!UI.foco) return; clearTimeout(resizeT); resizeT = setTimeout(render, 250); });
+  document.addEventListener("fullscreenchange", () => { if (UI.foco) render(); });
 
   /* ------------------------------------------------------------ eventos */
   document.addEventListener("click", (ev) => {
@@ -1003,6 +1353,15 @@
     // Cerrar selector abierto al hacer clic fuera
     if (UI.abierto && !ev.target.closest(".ms")) { UI.abierto = null; render(); return; }
     if (d.tab) { UI.tab = d.tab; window.scrollTo(0, 0); render(); return; }
+    if (d.foco) { UI.foco = d.foco; UI.scrollAntes = window.scrollY; render(); return; }
+    if (d.presIr) { UI.foco = d.presIr; render(); $(".pres").scrollTop = 0; return; }
+    if ("presCerrar" in d) { cerrarFoco(); return; }
+    if ("presFull" in d) { const de = document.documentElement; const p = document.fullscreenElement ? document.exitFullscreen() : de.requestFullscreen ? de.requestFullscreen() : null; if (p && p.catch) p.catch(() => toast("Este navegador no permite pantalla completa aquí; usa F11 o abre el módulo en otra pestaña.")); else if (!p) toast("Este navegador no permite pantalla completa aquí."); return; }
+    if (d.simRef) { UI.vistas["sim-pct"] = d.simRef; rerender("simulador", sSimulador); return; }
+    if ("anRegenerar" in d) { if (UI.confirmar === "an") { G.analisis[ctx().clave] = generarAnalisis(); UI.confirmar = null; guardar(); toast("Análisis regenerado"); } else UI.confirmar = "an"; render(); return; }
+    if (d.anNuevo) { const A = G.analisis[ctx().clave]; if (d.anNuevo === "hallazgos") A.hallazgos.push({ sev: "medio", titulo: "Nuevo hallazgo", texto: "" }); else if (d.anNuevo === "enfoque") A.enfoque.push(""); else A.plan.push({ accion: "", responsable: "", fecha: "", indicador: "", meta: "", estado: "pendiente" }); guardar(); render(); return; }
+    if (d.anBorrar) { const A = G.analisis[ctx().clave]; A[d.anBorrar].splice(+d.i, 1); guardar(); render(); return; }
+    if (d.anComp) { const c = ctx(), p0 = G.analisis[c.clave].plan[+d.anComp]; const n = G.compromisos.filter((x) => x.junta === c.clave).length + 1; G.compromisos.push({ id: uid(), junta: c.clave, prioridad: n, problema: "", accion: p0.accion, responsable: p0.responsable, fecha: p0.fecha, indicador: p0.indicador, esperado: p0.meta, estado: "pendiente", avance: 0, seguimiento: "" }); guardar(); toast(`Agregado a los compromisos de la junta ${MC[c.Jm - 1]} ${c.Ja}`); return; }
     if (d.ptipo) { P.tipo = d.ptipo; if (P.tipo === "rango" && !P.desde) { const L = periodoMeses(); P.desde = `${P.anio}-01-01`; P.hasta = isoLocal(new Date(P.anio, P.mes, 0)); } render(); return; }
     if ("modoEd" in d) { UI.modoEdicion = !UI.modoEdicion; render(); return; }
     if ("tema" in d) { const r = document.documentElement; const osc = r.dataset.theme ? r.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches; r.dataset.theme = osc ? "light" : "dark"; G.prefs.tema = r.dataset.theme; guardar(); render(); return; }
@@ -1044,6 +1403,9 @@
     if (d.cli) { let v = t.value.trim(); if (v !== "" && d.tipo === "p") v = String(Number(v.replace("%", "")) / 100); aplicarEdicion("c", d.cli, d.ruta, v); return; }
     if (d.kx !== undefined) { const J = junta(ctx().clave); J.kpisExtra[+d.kx][d.campo] = t.value; guardar(); render(); return; }
     if (d.fc) { const J = junta(ctx().clave); J.forecast = J.forecast || {}; const v = Number(t.value.replace(/[$,\s]/g, "")); if (t.value.trim() === "") delete J.forecast[d.fc]; else if (fin(v)) J.forecast[d.fc] = v; guardar(); render(); return; }
+    if (d.cliCart !== undefined) { G.cliCart = G.cliCart || {}; if (t.value) G.cliCart[d.cliCart] = t.value; else delete G.cliCart[d.cliCart]; guardar(); render(); return; }
+    if (d.an && t.tagName === "SELECT") { const A = G.analisis[ctx().clave]; A[d.an][+d.i][d.campo] = t.value; guardar(); render(); return; }
+    if (t.id === "mes-sin-fecha" || t.id === "anio-sin-fecha") return;
     if (d.cf === "estado") { const x = G.compromisos.find((z) => z.id === t.closest("tr").dataset.comp); if (x) { x.estado = t.value; if (t.value === "cumplido") x.avance = 100; guardar(); render(); } return; }
     if (d.cf === "avance") { render(); return; }
     if (t.id === "archivos-excel") { cargarExcel([...t.files]); return; }
@@ -1057,10 +1419,17 @@
     if (d.canc !== undefined) { const J = junta(ctx().clave); J.canceladas[+d.canc][d.campo] = t.value; guardar(); return; }
     if (d.msQ) { UI.busq[d.msQ] = t.value; render(); return; }
     if (d.busq) { UI.busq[d.busq] = t.value; render(); return; }
-    if ("sim" in d) { UI.vistas["sim-pct"] = t.value; render(); return; }
+    if ("sim" in d) { UI.vistas["sim-pct"] = t.value; rerender("simulador", sSimulador); return; }
+    if (d.an) { const A = G.analisis[ctx().clave]; if (!A) return; if (d.an === "situacion") A.situacion = t.value; else if (d.an === "enfoque") A.enfoque[+d.i] = t.value; else A[d.an][+d.i][d.campo] = t.value; guardar(); return; }
   });
   document.addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape" && UI.abierto) { UI.abierto = null; render(); }
+    if (ev.key === "Escape" && UI.abierto) { UI.abierto = null; render(); return; }
+    if (UI.foco && !ev.target.closest("input, textarea, select")) {
+      if (ev.key === "Escape") { cerrarFoco(); return; }
+      const L = listaFoco(), i = L.findIndex((x) => x.id === UI.foco);
+      if (ev.key === "ArrowRight" && L[i + 1]) { UI.foco = L[i + 1].id; render(); $(".pres").scrollTop = 0; }
+      if (ev.key === "ArrowLeft" && L[i - 1]) { UI.foco = L[i - 1].id; render(); $(".pres").scrollTop = 0; }
+    }
     if (ev.key === "Enter" && ev.target.matches("input.ed")) ev.target.blur();
   });
 
@@ -1071,7 +1440,7 @@
   function respaldoManual(txt) { const el = $("#resp-texto"); if (el) { el.value = txt; el.select(); toast("Selecciona y copia el texto del cuadro."); } else toast("No se pudo copiar."); }
 
   /* ----------------------------------------------------- respaldo */
-  const respaldo = () => ({ app: "isel-junta-mensual", version: 1, fecha: new Date().toISOString(), ed: G.ed, juntas: G.juntas, compromisos: G.compromisos });
+  const respaldo = () => ({ app: "isel-junta-mensual", version: 1, fecha: new Date().toISOString(), ed: G.ed, juntas: G.juntas, compromisos: G.compromisos, analisis: G.analisis || {}, cliCart: G.cliCart || {} });
   function exportar() {
     const txt = JSON.stringify(respaldo(), null, 1);
     if (window.SIN_DESCARGAS) { const el = $("#resp-texto"); if (el) { el.value = txt; el.select(); } copiar(txt); toast("Respaldo copiado. Pégalo en un archivo de texto para guardarlo."); return; }
@@ -1091,6 +1460,8 @@
     (R.compromisos || []).forEach((x) => comp.set(x.id, x));
     G.compromisos = [...comp.values()];
     G.juntas = Object.assign({}, G.juntas, R.juntas || {});
+    G.analisis = Object.assign({}, G.analisis || {}, R.analisis || {});
+    G.cliCart = Object.assign({}, G.cliCart || {}, R.cliCart || {});
     for (const k of ["h", "k", "c", "s"]) G.ed[k] = Object.assign({}, G.ed[k], (R.ed || {})[k] || {});
     guardar(); indexar(); render(); toast("Respaldo cargado");
   }
@@ -1113,9 +1484,11 @@
         msg(`Leyendo ${f.name}…`);
         const buf = await f.arrayBuffer();
         const wb = XLSX.read(buf, { type: "array", cellDates: true, sheetRows: 1600 });
-        const L = ISELParser.leer(ISELParser.libroDeSheetJS(wb));
+        const catalogo = Object.entries(IDX.cartNom).map(([k, n]) => ({ k, n }));
+        const msf = $("#mes-sin-fecha"), asf = $("#anio-sin-fecha");
+        const L = ISELParser.leer(ISELParser.libroDeSheetJS(wb), { catalogo, mesSinFecha: msf && asf && $("#sin-fecha-det").open ? [+asf.value, +msf.value] : null });
         ISELParser.combinar(nueva, L, f.name);
-        hechos.push(`${f.name}: ${L.tipo === "resultados" ? "Resultado de ventas " + L.anio + " (corte " + MESES[L.corte - 1] + ")" : "Tablero " + MESES[L.mes - 1] + " " + L.anio}`);
+        hechos.push(`${f.name}: ${L.tipo === "resultados" ? "Resultado de ventas " + L.anio + " (corte " + MESES[L.corte - 1] + ")" : L.tipo === "clientes" ? `ventas por cliente, ${L.filas.length} registros en ${L.meses.length} meses${L.sinCartera ? ` (${L.sinCartera} renglones sin cartera)` : ""}${Object.keys(L.nombres).length ? ` · vendedores sin cartera reconocida: ${Object.values(L.nombres).slice(0, 4).join(", ")}` : ""}` : "Tablero " + MESES[L.mes - 1] + " " + L.anio}`);
         if ($("#limpiar-ed") && $("#limpiar-ed").checked) {
           const pref = L.anio + "-";
           if (L.tipo === "resultados") for (const k of Object.keys(G.ed.h)) if (k.startsWith(pref)) delete G.ed.h[k];
@@ -1161,7 +1534,10 @@
   function arrancar() {
     try { const b = localStorage.getItem(LS_BASE); if (b) { const x = JSON.parse(b); if (x && x.hechos) { BASE = x; G_BASE_LOCAL = true; } } } catch (e) {}
     if (G.prefs.tema) document.documentElement.dataset.theme = G.prefs.tema;
-    indexar(); ajustarPeriodo(); render();
+    indexar(); ajustarPeriodo();
+    const mh = location.hash.match(/^#ver-([a-z]+)$/);
+    if (mh) { if (BLOQUES.some((b) => b[0] === mh[1])) { UI.tab = "junta"; UI.foco = mh[1]; } else if (SECC2.some((b) => b[0] === mh[1])) { UI.tab = "analisis"; UI.foco = mh[1]; } }
+    render();
     if (window.matchMedia) matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => render());
   }
   async function iniciar() {

@@ -108,11 +108,11 @@ a { color: var(--s1); }
 .caja { background: var(--panel2); border-radius: var(--r); padding: 12px 14px; min-width: 0; }
 
 /* ------------------------------------------------------------- MARCADOR --- */
-.marcador { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+.marcador { container-type: inline-size; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
 .dial { padding: 14px 16px 12px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .dial:last-child { border-right: 0; }
 .dial label { font-size: 11.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--ink2); }
-.dial .valor { font-family: var(--f-display); font-weight: 600; font-size: clamp(26px, 2.6vw, 40px); white-space: nowrap; line-height: 1; font-variant-numeric: tabular-nums; }
+.dial .valor { font-family: var(--f-display); font-weight: 600; font-size: clamp(24px, 3.3cqi, 44px); white-space: nowrap; line-height: 1; font-variant-numeric: tabular-nums; }
 .dial .det { font-size: 12px; color: var(--muted); font-family: var(--f-mono); }
 .dial.ok .valor { color: var(--ok); } .dial.warn .valor { color: var(--warn); } .dial.bad .valor { color: var(--bad); }
 .barra-avance { height: 6px; background: var(--panel2); border-radius: 3px; position: relative; overflow: hidden; margin-top: 4px; }
@@ -279,3 +279,65 @@ table.calor td.c { text-align: right; font-family: var(--f-mono); font-size: 12p
   .bloque { scroll-margin-top: 12px; }
 }
 @media (max-width: 420px) { .marcador { grid-template-columns: minmax(0, 1fr); } .dial { border-right: 0; } }
+
+/* ------------------------------------------------- Vista ampliada (módulo) --- */
+.ampliar { white-space: nowrap; }
+body.en-pres { overflow: hidden; }
+.pres { position: fixed; inset: 0; z-index: 80; background: var(--bg); overflow: auto; display: flex; flex-direction: column;
+  padding: env(safe-area-inset-top, 0px) 0 env(safe-area-inset-bottom, 0px); }
+.pres-barra { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; padding: 10px clamp(16px, 2vw, 40px);
+  background: var(--hero); color: var(--hero-ink); }
+.pres-barra .btn { background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.18); color: var(--hero-ink); }
+.pres-barra .btn.prim { background: var(--signal); border-color: var(--signal); color: #1A1300; }
+.pres-barra .btn[aria-pressed="true"] { background: var(--signal); color: #1A1300; }
+.pres-barra .btn[disabled] { visibility: hidden; }
+.pres-titulo { font-family: var(--f-display); font-size: clamp(16px, 1.4vw, 24px); letter-spacing: .04em; }
+.pres-titulo b { color: #FFD27A; font-family: var(--f-mono); font-size: .8em; margin-right: 6px; }
+.pres-der { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+.pres-cuerpo { flex: 1; padding: clamp(12px, 1.6vw, 32px) clamp(16px, 2vw, 40px) clamp(20px, 3vh, 48px); }
+.pres-cuerpo > .bloque { max-width: 2200px; margin: 0 auto; min-height: 100%; border: 0; box-shadow: 0 1px 0 var(--line); }
+.pres .bloque > header { padding: clamp(14px, 1.6vw, 28px) clamp(16px, 2vw, 36px); }
+.pres .bloque h2 { font-size: clamp(28px, 2.8vw, 56px); }
+.pres .bloque .pregunta { font-size: clamp(15px, 1.3vw, 24px); }
+.pres .bloque-num { font-size: clamp(12px, 1vw, 18px); }
+.pres .bloque-cuerpo { padding: clamp(14px, 1.6vw, 32px) clamp(16px, 2vw, 36px); gap: clamp(16px, 2.4vh, 36px); font-size: clamp(14px, 1.1vw, 21px); }
+.pres .sub { font-size: clamp(15px, 1.3vw, 24px); }
+.pres .nota-pie { font-size: clamp(12px, .9vw, 17px); }
+.pres table.t { font-size: clamp(13px, 1vw, 20px); }
+.pres table.t th { font-size: clamp(11px, .8vw, 16px); padding: .6em .8em; }
+.pres table.t td { padding: .55em .8em; }
+.pres .tabla-wrap { max-height: none; }
+.pres .dial { padding: clamp(14px, 1.4vw, 28px); }
+.pres .dial label { font-size: clamp(11px, .9vw, 17px); }
+.pres .dial .valor { font-size: clamp(30px, 3.2cqi, 110px); }
+.pres .dial .det { font-size: clamp(12px, .95vw, 18px); }
+.pres .guion { font-size: clamp(15px, 1.35vw, 26px); max-width: none; }
+.pres .diag-frase strong { font-size: clamp(20px, 1.9vw, 36px); }
+.pres .tira .celda label { font-size: clamp(11px, .85vw, 16px); }
+.pres .tira .celda .valor { font-size: clamp(26px, 2.6vw, 54px); }
+.pres .tira .celda small { font-size: clamp(12px, .9vw, 17px); }
+.pres .grupo-sem strong { font-size: clamp(28px, 2.8vw, 56px); }
+.pres .grupo-sem span, .pres .contrib, .pres .regla { font-size: clamp(13px, 1vw, 20px); }
+.pres .graf { height: clamp(300px, 46vh, 820px) !important; }
+.pres .graf.baja { height: clamp(240px, 34vh, 600px) !important; }
+.pres .graf.alta { height: clamp(360px, 58vh, 980px) !important; }
+.pres input.ed, .pres .btn, .pres .ms > button, .pres .seg-claro button { font-size: clamp(12px, .9vw, 17px); }
+.pres .sem { font-size: clamp(12px, .85vw, 17px); }
+@media (max-width: 760px) { .pres-der { margin-left: 0; } .pres-barra .btn { font-size: 12px; } }
+
+/* ------------------------------------------------------------ Análisis */
+.interpretacion { background: var(--panel2); border-radius: var(--r); padding: 12px 16px; border-left: 3px solid var(--s1); }
+.interpretacion p { margin: 6px 0 0; max-width: 95ch; line-height: 1.6; }
+.hallazgos { display: flex; flex-direction: column; gap: 10px; }
+.hallazgo { border: 1px solid var(--line); border-left-width: 4px; border-radius: var(--r); padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; background: var(--panel); }
+.hallazgo.bad { border-left-color: var(--bad); } .hallazgo.warn { border-left-color: var(--warn); } .hallazgo.na { border-left-color: var(--muted); }
+.hallazgo-cab { display: flex; gap: 8px; align-items: center; }
+.hallazgo-cab .titulo { font-weight: 600; flex: 1; min-width: 0; padding: 5px 8px; }
+.hallazgo textarea.campo, .enfoque textarea.campo { min-height: 0; }
+ol.enfoque { margin: 0; padding-left: 22px; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); column-gap: 24px; flex-direction: column; gap: 8px; }
+ol.enfoque li { display: flex; gap: 6px; align-items: flex-start; }
+ol.enfoque li::marker { font-family: var(--f-mono); color: var(--muted); }
+tr.subfila td { font-size: 12.5px; color: var(--ink2); background: var(--panel2); }
+@media (max-width: 1100px) { .dial .valor, .pres .dial .valor { font-size: clamp(24px, 5.6cqi, 60px); } }
+@media (max-width: 760px) { .dial .valor, .pres .dial .valor { font-size: clamp(22px, 8.5cqi, 48px); } }
+@media (max-width: 420px) { .dial .valor, .pres .dial .valor { font-size: clamp(26px, 15cqi, 48px); } }

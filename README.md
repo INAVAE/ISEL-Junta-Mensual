@@ -15,7 +15,13 @@ Página para presentar los resultados de ventas en la junta mensual, en el orden
 | 08 | Acción | ¿Qué vamos a hacer? (compromisos con responsable, fecha e indicador) |
 | 09 | Otros | Facturas canceladas |
 
-La pestaña **Análisis adicional** reúne lo que no está en la estructura de la junta: histórico
+Cada módulo tiene el botón **⤢ Ampliar**: lo muestra a pantalla completa con tipografía y gráficas
+escaladas al tamaño de la pantalla; con ← y → se pasa al módulo anterior o siguiente y Esc cierra.
+También se puede abrir en otra pestaña (por ejemplo `.../#ver-marcador`).
+
+La pestaña **Análisis adicional** abre con el **Análisis general de ISEL** (situación, hallazgos por
+severidad, sugerencias de enfoque y plan de acción; todo editable) y reúne lo que no está en la
+estructura de la junta: histórico
 2023–2026 y estacionalidad, año contra año, mapa de cumplimiento mensual, línea × cartera,
 concentración de carteras y clientes, movimiento de clientes, tipo de cliente y simulador de cierre.
 
@@ -42,6 +48,11 @@ concentración de carteras y clientes, movimiento de clientes, tipo de cliente y
 **Opción rápida (desde la página):** pestaña **Datos → Elegir archivos de Excel** y selecciona
 el *Resultado de ventas* del año y el *Tablero ISEL* actualizados. La página los lee en el
 navegador; los archivos no se suben a ningún lado. Lo cargado queda en ese navegador.
+
+**Ventas por cliente:** para ver la cartera de cada cliente, desglosar clientes atendidos por
+varias carteras y filtrar el movimiento de clientes por cualquier periodo, carga también un reporte
+de ventas por cliente de SAE u Odoo (Excel o CSV) con fecha, cliente, cartera o vendedor e importe.
+Sin ese archivo se usan los listados del Tablero (un trimestre fijo) y la cartera se asigna a mano.
 
 **Opción para todos (actualizar el sitio):** después de cargarlos, el sitio publicado sigue
 con los datos anteriores para los demás. Para publicarlos, pide a Claude que regenere

@@ -1,0 +1,5 @@
+datos.json
+*.xlsm
+*.xlsx
+_prueba.html
+.DS_Store

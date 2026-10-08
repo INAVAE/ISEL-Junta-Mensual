@@ -261,7 +261,7 @@
     ["portafolio", "06", "Portafolio", "¿Dónde crecemos o perdemos?"],
     ["pronostico", "07", "Pronóstico", "¿Qué viene?"],
     ["accion", "08", "Acción", "¿Qué vamos a hacer?"],
-    ["otros", "09", "Otros", "Facturas canceladas y pendientes"],
+    ["otros", "09", "Otros", "Facturas que afectaron el cierre"],
   ];
   function bloque(id, cuerpo, acciones = "") {
     const b = BLOQUES.find((x) => x[0] === id);
@@ -340,6 +340,8 @@
       if (Math.abs(sc - c.per.log) > 1) aviso = `<div class="aviso">La suma de las carteras (${fmt$(sc)}) no coincide con la venta total del mes (${fmt$(c.per.log)}). ${UI.modoEdicion ? `<button class="btn chico" data-igualar="${c.Ja}-${c.Jm}" type="button">Igualar el total a la suma de carteras</button>` : "Activa <b>Modificar cifras</b> para corregirlo."}</div>`;
     }
     const enCurso = c.L.some(([a, m]) => m > cerrado(a) && a >= hoy.getFullYear());
+    const AF = c.unMes ? afectaciones(c.Ja, c.Jm) : null;
+    if (AF && (AF.salieron.length || Math.abs(AF.odooHoy - c.per.log) > 1)) aviso += `<div class="aviso info">${AF.salieron.length ? `${AF.salieron.length} facturas emitidas en ${MESES[c.Jm - 1]} por ${fmtM(AF.suma(AF.salieron))} se re-fecharon a otro mes. ` : ""}${Math.abs(AF.odooHoy - c.per.log) > 1 ? `Odoo registra hoy ${fmtM(AF.odooHoy)} para el mes (${fmtS(AF.odooHoy - c.per.log)} contra lo reportado). ` : ""}Detalle en el bloque 09.</div>`;
     const guion = `<b>${esc(c.etiqueta)}</b> cerró en <b>${fmtM(c.per.log)}</b> contra una meta de <b>${fmtM(c.per.meta)}</b>, equivalente a <b>${fmtP(cumP)}</b>. Acumulamos <b>${fmtM(c.acum.log)}</b> contra <b>${fmtM(c.acum.meta)}</b>, con ${c.acum.log - c.acum.meta < 0 ? "un déficit" : "un superávit"} de <b>${fmtM(Math.abs(c.acum.log - c.acum.meta))}</b>. Respecto al mes anterior ${d.delta >= 0 ? "recuperamos" : "ampliamos la brecha en"} <b>${fmtM(Math.abs(d.delta))}</b>${restantes > 0 ? ` y para alcanzar la meta anual de <b>${fmtM(c.mAnual, 1)}</b> necesitamos vender <b>${fmtM(necesario)}</b> por mes en los ${restantes} meses restantes (${fmtP(div(necesario, promedio))} del promedio mensual actual)` : ""}.`;
     const tablaRes = `<div class="tabla-wrap" style="max-height:none"><table class="t"><thead><tr><th>Resultado</th><th class="n">${esc(c.etiqueta)}</th><th class="n">Acumulado a ${MC[c.Jm - 1]} ${c.Ja}</th></tr></thead><tbody>
       <tr><td>Venta</td>${c.unMes ? celdaNum("h", `${c.Ja}-${c.Jm}-total-total`, "log", c.per.log, tot(c.Ja, c.Jm)?.edL) : `<td class="n">${fmt$(c.per.log)}</td>`}<td class="n">${fmt$(c.acum.log)}</td></tr>
@@ -712,14 +714,114 @@
   }
 
   /* ---------------------------------------------------------- 09 Otros */
+  /* --------------------------------------- facturas de Odoo: re-facturación */
+  let FAC = null;
+  function facturasInfo() {
+    if (!BASE.facturas || !BASE.facturas.docs || !BASE.facturas.docs.length) return null;
+    if (FAC && FAC.src === BASE.facturas) return FAC;
+    const docs = BASE.facturas.docs.map((x) => ({ k: x[0], f: x[1], cli: x[2], cart: x[3], sub: x[4], t: x[5], pago: x[6], ref: x[7], ant: !!x[8], est: x[9] || "", mes: x[1].slice(0, 7) }));
+    const byK = new Map(docs.map((d) => [d.k, d]));
+    const series = {};
+    for (const d of docs) { const m = d.k.match(/^INV\/(\d{4})\/(\d+)$/); if (!m) continue; d.n = +m[2]; d.serie = m[1]; d.ancho = m[2].length; (series[m[1]] = series[m[1]] || []).push(d); }
+    const gaps = [];
+    for (const [y, L] of Object.entries(series)) {
+      L.sort((p, q) => p.n - q.n);
+      // La secuencia normal es la subsecuencia más larga con fechas no decrecientes; lo demás se movió de mes
+      const v = L.map((d) => +d.f.slice(0, 4) * 12 + +d.f.slice(5, 7));
+      const colas = [], idx = [], prev = new Array(L.length).fill(-1);
+      for (let i = 0; i < v.length; i++) {
+        let lo = 0, hi = colas.length;
+        while (lo < hi) { const md = (lo + hi) >> 1; if (colas[md] <= v[i]) lo = md + 1; else hi = md; }
+        colas[lo] = v[i]; idx[lo] = i; prev[i] = lo > 0 ? idx[lo - 1] : -1;
+      }
+      const normal = new Array(L.length).fill(false);
+      for (let i = idx[colas.length - 1]; i >= 0; i = prev[i]) normal[i] = true;
+      let ult = null; L.forEach((d, j) => { if (normal[j]) ult = d.mes; d.seq = normal[j] ? d.mes : ult; d.normal = normal[j]; });
+      let sig = null; for (let j = L.length - 1; j >= 0; j--) { if (L[j].normal) sig = L[j].mes; if (!L[j].seq) L[j].seq = sig; }
+      for (let j = 1; j < L.length; j++) for (let n = L[j - 1].n + 1; n < L[j].n; n++) gaps.push({ k: `INV/${y}/${String(n).padStart(L[j].ancho, "0")}`, seq: L[j - 1].seq });
+    }
+    FAC = { src: BASE.facturas, docs, byK, gaps };
+    return FAC;
+  }
+  function afectaciones(a, m) {
+    const I = facturasInfo(); if (!I) return null;
+    const M = `${a}-${pad(m)}`;
+    const suma = (L) => L.reduce((s, d) => s + d.sub, 0);
+    const delMes = I.docs.filter((d) => d.mes === M);
+    const salieron = I.docs.filter((d) => d.n && d.seq === M && d.mes !== M).sort((p, q) => q.sub - p.sub);
+    const entraron = I.docs.filter((d) => d.n && d.mes === M && d.seq !== M).sort((p, q) => q.sub - p.sub);
+    const faltantes = I.gaps.filter((g) => g.seq === M);
+    const notas = I.docs.filter((d) => d.t === "N" && !d.ant && d.mes > M && I.byK.get(d.ref)?.mes === M).sort((p, q) => p.sub - q.sub);
+    const odooHoy = suma(delMes);
+    let foto = null;
+    const F = (BASE.fotos || {})[M];
+    if (F) {
+      const hoyMes = new Map(delMes.map((d) => [d.k, d])); const fk = new Map(F.docs.map((x) => [x[0], x]));
+      const canceladas = [], cambiaron = [], nuevas = [];
+      for (const [k, x] of fk) {
+        const d = hoyMes.get(k);
+        if (!d) { if (!I.byK.has(k)) canceladas.push({ k, sub: x[1], cart: x[2], cli: x[3], mes: M }); }
+        else if (Math.abs(d.sub - x[1]) > 1) cambiaron.push({ ...d, antes: x[1] });
+      }
+      for (const [k, d] of hoyMes) if (!fk.has(k)) nuevas.push(d);
+      foto = { tomada: F.tomada, total: F.docs.reduce((s, x) => s + x[1], 0), canceladas, cambiaron, nuevas };
+    }
+    const od = {}; delMes.forEach((d) => (od[d.cart] = (od[d.cart] || 0) + d.sub));
+    const rep = {}; for (const r of IDX.h.values()) if (r.a === a && r.m === m && r.d === "cartera") rep[r.k] = r.log;
+    const porCartera = [...new Set([...Object.keys(od), ...Object.keys(rep)])].map((k) => ({ k, rep: rep[k] || 0, od: od[k] || 0, dif: (od[k] || 0) - (rep[k] || 0) })).filter((x) => Math.abs(x.dif) > 1).sort((p, q) => p.dif - q.dif);
+    return { M, delMes, salieron, entraron, faltantes, notas, odooHoy, foto, porCartera, emitido: odooHoy + suma(salieron) - suma(entraron), suma };
+  }
+
+  /* ---------------------------------------------------------- 09 Otros */
   function bOtros() {
-    const c = ctx(), J = junta(c.clave);
+    const c = ctx(), J = junta(c.clave), C = colores();
+    const A = afectaciones(c.Ja, c.Jm);
+    let auto = "";
+    if (!A) auto = `<div class="aviso info">Carga en <b>Datos</b> el reporte <b>Estadísticas de facturas</b> de Odoo para detectar automáticamente las facturas que se re-fecharon o cancelaron después del cierre de ${MESES[c.Jm - 1]}.</div>`;
+    else {
+      const op = [...new Set([...A.salieron, ...A.entraron, ...A.notas, ...A.porCartera, ...(A.foto ? A.foto.canceladas : [])].map((x) => x.cart || x.k))].filter(Boolean).sort().map((k) => ({ v: k, t: nombreCartera(k) }));
+      registrarMs("fac-carts", op);
+      const ok = (d) => pasa("fac-carts", d.cart || d.k);
+      const sal = A.salieron.filter(ok), ent = A.entraron.filter(ok), notas = A.notas.filter(ok), cartD = A.porCartera.filter((x) => pasa("fac-carts", x.k));
+      const meta = tot(c.Ja, c.Jm)?.meta, rep = tot(c.Ja, c.Jm)?.log;
+      const fueraAnio = sal.filter((d) => d.mes.slice(0, 4) !== String(c.Ja));
+      const destino = (d) => `${MC[+d.mes.slice(5) - 1]} ${d.mes.slice(0, 4)}`;
+      const fila = (d, extra = "") => `<tr><td class="mono">${esc(d.k)}</td><td class="mono">${esc(d.f)}</td><td>${esc(d.cli)}</td><td style="font-size:12.5px;white-space:nowrap"><span class="cod" style="margin:0">${esc(d.cart)}</span> ${esc((IDX.cartNom[d.cart] || "").split(" ").slice(0, 2).join(" "))}</td><td class="n">${fmt$(d.sub)}</td><td style="font-size:12.5px;white-space:nowrap">${esc(d.pago || "")}</td>${extra}</tr>`;
+      const tabla = (L, cab, extraCab = "", extra = () => "") => L.length ? `<div class="tabla-wrap"><table class="t"><thead><tr><th>Factura</th><th>Fecha actual</th><th>Cliente</th><th>Cartera</th><th class="n">Subtotal</th><th>Pago</th>${extraCab}</tr></thead><tbody>${L.map((d) => fila(d, extra(d))).join("")}</tbody><tfoot><tr><td colspan="4">${L.length} ${cab}</td><td class="n">${fmt$(A.suma(L))}</td><td colspan="${extraCab ? 2 : 1}"></td></tr></tfoot></table></div>` : `<div class="vacio">Ninguna.</div>`;
+      // Serie mensual de venta re-fechada fuera de su mes
+      const meses = Array.from({ length: Math.max(cerrado(c.Ja), c.Jm) }, (_, i) => i + 1);
+      const serie = meses.map((mm) => { const X = afectaciones(c.Ja, mm); return X ? X.suma(X.salieron.filter(ok)) : 0; });
+      chart("g-refac", { type: "bar", data: { labels: meses.map((mm) => MC[mm - 1]), datasets: [{ label: "Venta re-fechada fuera de su mes", data: serie, backgroundColor: meses.map((mm) => (mm === c.Jm ? C.s2 : alfa(C.s2, 0.45))) }] }, options: { plugins: { legend: { display: false }, tooltip: { callbacks: { label: (x) => `${fmt$(x.parsed.y)} · ${fmtP(div(x.parsed.y, tot(c.Ja, meses[x.dataIndex])?.log), 1)} de la venta del mes` } } }, scales: { y: ejeM({ beginAtZero: true }), x: { grid: { display: false } } } } });
+      const fotoHtml = !A.foto ? `<p class="nota-pie">Todavía no hay foto de ${MESES[c.Jm - 1]}: se guarda la primera vez que se carga el reporte con el mes ya cerrado.</p>`
+        : `<div><div class="sub">Cambios contra la foto del cierre <span class="der">foto del ${new Date(A.foto.tomada).toLocaleDateString("es-MX", { dateStyle: "medium" })}</span></div>
+          ${A.foto.canceladas.length || A.foto.cambiaron.length || A.foto.nuevas.length ? `<div class="tabla-wrap"><table class="t"><thead><tr><th>Factura</th><th>Qué pasó</th><th>Cliente</th><th>Cartera</th><th class="n">En la foto</th><th class="n">Hoy</th></tr></thead><tbody>
+            ${A.foto.canceladas.filter(ok).map((d) => `<tr><td class="mono">${esc(d.k)}</td><td><span class="sem bad">Cancelada</span></td><td>${esc(d.cli)}</td><td style="font-size:12.5px">${esc(nombreCartera(d.cart))}</td><td class="n">${fmt$(d.sub)}</td><td class="n">$0</td></tr>`).join("")}
+            ${A.foto.cambiaron.filter(ok).map((d) => `<tr><td class="mono">${esc(d.k)}</td><td><span class="sem warn">Cambió de monto</span></td><td>${esc(d.cli)}</td><td style="font-size:12.5px">${esc(nombreCartera(d.cart))}</td><td class="n">${fmt$(d.antes)}</td><td class="n">${fmt$(d.sub)}</td></tr>`).join("")}
+            ${A.foto.nuevas.filter(ok).map((d) => `<tr><td class="mono">${esc(d.k)}</td><td><span class="sem na">Agregada después</span></td><td>${esc(d.cli)}</td><td style="font-size:12.5px">${esc(nombreCartera(d.cart))}</td><td class="n">$0</td><td class="n">${fmt$(d.sub)}</td></tr>`).join("")}
+            </tbody></table></div>` : `<div class="vacio">Sin cambios desde la foto. Cuando vuelvas a cargar el reporte, aquí aparecerán las facturas de ${MESES[c.Jm - 1]} que se cancelen o cambien, con su monto.</div>`}</div>`;
+      auto = `<div class="tira">
+          <div class="celda"><label>Emitido con folio de ${MC[c.Jm - 1]}</label><div class="valor">${fmtM(A.emitido)}</div><small>${fmtP(div(A.emitido, meta))} de la meta</small></div>
+          <div class="celda"><label>Re-fechado a otro mes</label><div class="valor neg">${fmtS(-A.suma(A.salieron))}</div><small>${A.salieron.length} facturas${fueraAnio.length ? ` · ${fueraAnio.length} a otro año` : " · no cambia el acumulado anual"}</small></div>
+          <div class="celda"><label>Entró de otros meses</label><div class="valor ${A.entraron.length ? "pos" : ""}">${fmtS(A.suma(A.entraron))}</div><small>${A.entraron.length} facturas con folio de otro mes</small></div>
+          <div class="celda"><label>Venta del mes en Odoo hoy</label><div class="valor">${fmtM(A.odooHoy)}</div><small>${fmtP(div(A.odooHoy, meta))} · reportado ${fmtM(rep)} (${fmtS(A.odooHoy - (rep || 0))})</small></div>
+        </div>
+        <div class="interpretacion"><p>${A.salieron.length ? `Con folio de ${MESES[c.Jm - 1]} se emitieron <b>${fmtM(A.emitido)}</b>. <b>${A.salieron.length}</b> facturas por <b>${fmtM(A.suma(A.salieron))}</b> se cancelaron y se volvieron a emitir con fecha de otro mes (<b>${fmtPs(-div(A.suma(A.salieron), meta), 1)}</b> de cumplimiento)${A.entraron.length ? ` y entraron <b>${A.entraron.length}</b> con folio de otros meses por <b>${fmtM(A.suma(A.entraron))}</b> (${fmtPs(div(A.suma(A.entraron), meta), 1)})` : ""}. Efecto neto en el cierre: <b>${fmtS(A.odooHoy - A.emitido)}</b>, cumplimiento de ${fmtP(div(A.emitido, meta))} a <b>${fmtP(div(A.odooHoy, meta))}</b>. ${fueraAnio.length ? `${fueraAnio.length} pasaron a ${fueraAnio[0].mes.slice(0, 4)}, así que también afectan el cierre anual.` : "Como se re-emitieron dentro del mismo año, no cambian el acumulado anual: la venta cuenta en el mes al que se movieron."}` : `Ninguna factura con folio de ${MESES[c.Jm - 1]} se movió a otro mes.`}${A.faltantes.length ? ` Además hay <b>${A.faltantes.length}</b> folios de la secuencia de ${MESES[c.Jm - 1]} que no aparecen en el reporte (canceladas; Odoo no exporta su monto).` : ""}</p></div>
+        <div class="sub" style="margin:0">${ms("fac-carts", op, "Carteras")}</div>
+        <div><div class="sub">Re-fechadas a otro mes</div>${tabla(sal, "facturas", "<th>Movida a</th>", (d) => `<td class="mono" style="white-space:nowrap">${destino(d)}${d.mes.slice(0, 4) !== String(c.Ja) ? ' <span class="sem bad">otro año</span>' : ""}</td>`)}</div>
+        <div class="grid2"><div><div class="sub">Re-facturación por mes · ${c.Ja}</div><div class="graf baja"><canvas id="g-refac" role="img" aria-label="Venta re-fechada por mes"></canvas></div><p class="nota-pie">Venta con folio de cada mes que terminó fechada en otro mes. Barra marcada: ${MESES[c.Jm - 1]}.</p></div>
+        ${fotoHtml}</div>
+        <details><summary class="campo-label" style="cursor:pointer">Folios de ${MESES[c.Jm - 1]} sin factura en el reporte (${A.faltantes.length})</summary><p class="nota-pie">Son números publicados que hoy no aparecen: facturas canceladas. El reporte de Odoo no trae su monto; si alguno importa, captúralo abajo.</p><div style="display:flex;flex-wrap:wrap;gap:6px">${A.faltantes.map((g) => `<span class="sem na">${esc(g.k)}</span>`).join("") || "Ninguno"}</div></details>
+        <details ${ent.length ? "" : ""}><summary class="campo-label" style="cursor:pointer">Facturas con folio de otro mes fechadas en ${MESES[c.Jm - 1]} (${ent.length} · ${fmt$(A.suma(ent))})</summary>${tabla(ent, "facturas", "<th>Folio de</th>", (d) => `<td class="mono">${MC[+d.seq.slice(5) - 1]} ${d.seq.slice(0, 4)}</td>`)}</details>
+        <details ${notas.length ? "open" : ""}><summary class="campo-label" style="cursor:pointer">Notas de crédito posteriores que revierten ventas de ${MESES[c.Jm - 1]} (${notas.length})</summary><p class="nota-pie">No incluye la aplicación de anticipos (crédito o descuento de anticipo).</p>${tabla(notas, "notas", "<th>Revierte</th>", (d) => `<td class="mono">${esc(d.ref)}</td>`)}</details>
+        <details ${cartD.length ? "open" : ""}><summary class="campo-label" style="cursor:pointer">Diferencias por cartera: reportado contra Odoo hoy (${cartD.length})</summary>${cartD.length ? `<div class="tabla-wrap" style="max-height:none"><table class="t"><thead><tr><th>Cartera</th><th class="n">Reportado</th><th class="n">Odoo hoy</th><th class="n">Diferencia</th></tr></thead><tbody>${cartD.map((x) => `<tr><td>${esc(nombreCartera(x.k))}</td><td class="n">${fmt$(x.rep)}</td><td class="n">${fmt$(x.od)}</td><td class="n ${x.dif < 0 ? "neg" : "pos"}">${fmt$(x.dif)}</td></tr>`).join("")}</tbody></table></div><p class="nota-pie">Cambios hechos en Odoo después de preparar el Resultado de ventas. Desde la siguiente carga, la foto del cierre dirá qué facturas fueron.</p>` : `<div class="vacio">El Resultado de ventas coincide con Odoo por cartera.</div>`}</details>`;
+    }
     const L = J.canceladas || (J.canceladas = []);
     const total = L.reduce((s, x) => s + (+x.monto || 0), 0);
-    const cuerpo = `<div class="sub" style="margin:0">Facturas canceladas en ${MESES[c.Jm - 1]} ${c.Ja} <span class="der"><button class="btn chico" data-canc-nueva type="button">+ Agregar factura</button></span></div>
+    const manual = `<div class="sub" style="margin:0">Captura manual <span class="der"><button class="btn chico" data-canc-nueva type="button">+ Agregar factura</button></span></div>
       ${L.length ? `<div class="tabla-wrap" style="max-height:none"><table class="t compromisos"><thead><tr><th>Folio</th><th>Fecha</th><th>Cliente</th><th>Cartera / vendedor</th><th class="n">Monto</th><th>Motivo</th><th></th></tr></thead><tbody>
         ${L.map((x, i) => `<tr><td><input data-canc="${i}" data-campo="folio" value="${esc(x.folio)}" aria-label="Folio"></td><td><input type="date" data-canc="${i}" data-campo="fecha" value="${esc(x.fecha)}" aria-label="Fecha"></td><td><input data-canc="${i}" data-campo="cliente" value="${esc(x.cliente)}" aria-label="Cliente"></td><td><input data-canc="${i}" data-campo="cartera" value="${esc(x.cartera)}" aria-label="Cartera"></td><td class="n"><input data-canc="${i}" data-campo="monto" value="${esc(x.monto)}" inputmode="decimal" style="text-align:right" aria-label="Monto"></td><td><textarea rows="1" data-canc="${i}" data-campo="motivo" aria-label="Motivo">${esc(x.motivo)}</textarea></td><td><button class="restaurar" data-canc-borrar="${i}" type="button" title="Eliminar">✕</button></td></tr>`).join("")}
-        </tbody><tfoot><tr><td colspan="4">${L.length} facturas</td><td class="n">${fmt$(total)}</td><td colspan="2">${fmtP(div(total, c.per.log), 2)} de la venta del periodo</td></tr></tfoot></table></div>` : `<div class="vacio">Sin facturas canceladas registradas. Usa <b>+ Agregar factura</b> para capturarlas antes de la junta.</div>`}`;
+        </tbody><tfoot><tr><td colspan="4">${L.length} facturas</td><td class="n">${fmt$(total)}</td><td colspan="2">${fmtP(div(total, c.per.log), 2)} de la venta del periodo</td></tr></tfoot></table></div>` : `<div class="vacio">Para lo que no venga en Odoo: motivo de una cancelación, folios faltantes con monto, etc.</div>`}`;
+    const cuerpo = `<div class="sub" style="margin:0">Facturas que afectaron el cierre de ${MESES[c.Jm - 1]} ${c.Ja}</div>${auto}${manual}`;
     return bloque("otros", cuerpo);
   }
 
@@ -847,7 +949,17 @@
   }
 
   /* ---------------------------------------------- clientes: datos y carteras */
-  const hayVC = () => !!(BASE.ventasCliente && BASE.ventasCliente.filas && BASE.ventasCliente.filas.length);
+  let VCF = null;
+  // Ventas por cliente: del reporte de facturas de Odoo si está cargado; si no, de un reporte de clientes
+  function vcFilas() {
+    if (BASE.facturas && BASE.facturas.docs && BASE.facturas.docs.length) {
+      if (VCF && VCF.src === BASE.facturas) return VCF.filas;
+      VCF = { src: BASE.facturas, filas: BASE.facturas.docs.map((x) => [+x[1].slice(0, 4), +x[1].slice(5, 7), x[2], x[3], x[4]]) };
+      return VCF.filas;
+    }
+    return (BASE.ventasCliente && BASE.ventasCliente.filas) || [];
+  }
+  const hayVC = () => vcFilas().length > 0;
   function nombreCartera(k) {
     if (!k) return "—";
     if (k === "S/C") return "Sin cartera";
@@ -857,7 +969,7 @@
   }
   function ventasPorCliente(L) {
     const set = new Set(L.map(([a, m]) => a * 100 + m)); const out = new Map();
-    for (const [a, m, cli, cart, v] of BASE.ventasCliente.filas) {
+    for (const [a, m, cli, cart, v] of vcFilas()) {
       if (!set.has(a * 100 + m)) continue;
       const x = out.get(cli) || { t: 0, c: new Map() };
       x.t += v; x.c.set(cart, (x.c.get(cart) || 0) + v); out.set(cli, x);
@@ -927,7 +1039,7 @@
     const multi = comp.filter((x) => x.todas.length > 1).length;
     const etP = etiquetaPeriodo(c.L), etA = etiquetaPeriodo(Lp).replace(/^(T\d|S\d|Año) · /, "");
     const filasComp = vis.map((x) => {
-      const sub = desg && x.todas.length > 1 ? x.desglose.sort((p, r) => r.u - p.u).map((d) => `<tr class="subfila"><td style="padding-left:28px">↳ ${esc(nombreCartera(d.k))}</td><td></td><td class="n">${fmt$(d.a)}</td><td class="n">${fmt$(d.u)}</td><td class="n ${d.u - d.a < 0 ? "neg" : "pos"}">${fmt$(d.u - d.a)}</td></tr>`).join("") : "";
+      const sub = desg && x.todas.length > 1 ? x.desglose.filter((d) => Math.abs(d.u) > 0.5 || Math.abs(d.a) > 0.5).sort((p, r) => r.u - p.u).map((d) => `<tr class="subfila"><td style="padding-left:28px">↳ ${esc(nombreCartera(d.k))}</td><td></td><td class="n">${fmt$(d.a)}</td><td class="n">${fmt$(d.u)}</td><td class="n ${d.u - d.a < 0 ? "neg" : "pos"}">${fmt$(d.u - d.a)}</td></tr>`).join("") : "";
       return `<tr><td>${esc(x.cliente)}</td><td style="font-size:12.5px">${etqCarts(x)}</td><td class="n">${fmt$(x.ant)}</td><td class="n">${fmt$(x.ult)}</td><td class="n ${x.dif < 0 ? "neg" : "pos"}">${fmt$(x.dif)}</td></tr>${sub}`;
     }).join("");
     return seccion("clientes", "Movimiento de clientes", `${esc(etP)} contra ${esc(etA)}`,
@@ -1206,7 +1318,8 @@
     return `<section class="bloque"><header><h2>Datos de la página</h2><span class="pregunta">Fuentes, actualización mensual y respaldo</span></header><div class="bloque-cuerpo">
       <div class="grid2"><div><div class="sub">Cargar reportes de Excel</div>
         <p style="margin:0 0 10px">Cada mes selecciona el <b>Resultado de ventas</b> del año y el <b>Tablero ISEL</b> actualizados (.xlsm o .xlsx). La página reconoce cada archivo por sus hojas y reemplaza solo lo que trae ese archivo; lo demás se conserva.</p>
-        <p style="margin:0 0 10px">Para el análisis de clientes por cartera y por periodo, agrega un <b>reporte de ventas por cliente</b> de SAE u Odoo (Excel o CSV) con columnas de <b>fecha</b>, <b>cliente</b>, <b>cartera o vendedor</b> e <b>importe</b> (venta neta, subtotal o importe). Puede abarcar varios meses; se reemplazan solo los meses que trae. ${hayVC() ? `<b>Cargado:</b> ${new Set(BASE.ventasCliente.filas.map((f) => f[2])).size} clientes, ${new Set(BASE.ventasCliente.filas.map((f) => f[0] * 100 + f[1])).size} meses.` : ""}</p>
+        <p style="margin:0 0 10px">Agrega también el reporte <b>Estadísticas de facturas</b> de Odoo (Contabilidad → Reportes, exportado a Excel con todas las columnas). Con él la página detecta las facturas re-fechadas o canceladas que afectaron cada cierre (bloque 09) y arma el análisis de clientes por cartera. ${BASE.facturas ? `<b>Cargado:</b> ${BASE.facturas.docs.length.toLocaleString("es-MX")} documentos del ${esc(BASE.facturas.desde)} al ${esc(BASE.facturas.hasta)}.` : ""}</p>
+        <p style="margin:0 0 10px">Si no tienes ese reporte, sirve cualquier <b>reporte de ventas por cliente</b> de SAE u Odoo (Excel o CSV) con columnas de <b>fecha</b>, <b>cliente</b>, <b>cartera o vendedor</b> e <b>importe</b> (venta neta, subtotal o importe). Puede abarcar varios meses; se reemplazan solo los meses que trae. ${hayVC() ? `<b>Cargado:</b> ${new Set(vcFilas().map((f) => f[2])).size} clientes, ${new Set(vcFilas().map((f) => f[0] * 100 + f[1])).size} meses.` : ""}</p>
         <details id="sin-fecha-det"><summary class="campo-label" style="cursor:pointer">Si el reporte de clientes no trae fecha</summary><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px"><label for="mes-sin-fecha" style="font-size:13px">Todo el archivo corresponde a</label><select class="campo" id="mes-sin-fecha" style="width:auto">${MESES.map((n, i) => `<option value="${i + 1}" ${i + 1 === ctx().Jm ? "selected" : ""}>${n}</option>`).join("")}</select><select class="campo" id="anio-sin-fecha" style="width:auto">${[...new Set([...IDX.anios, hoy.getFullYear()])].map((a) => `<option ${a === ctx().Ja ? "selected" : ""}>${a}</option>`).join("")}</select></div></details>
         <label class="btn prim" for="archivos-excel" style="width:max-content">Elegir archivos de Excel</label>
         <input type="file" id="archivos-excel" accept=".xlsx,.xlsm,.xls,.csv" multiple hidden>
@@ -1488,7 +1601,7 @@
         const msf = $("#mes-sin-fecha"), asf = $("#anio-sin-fecha");
         const L = ISELParser.leer(ISELParser.libroDeSheetJS(wb), { catalogo, mesSinFecha: msf && asf && $("#sin-fecha-det").open ? [+asf.value, +msf.value] : null });
         ISELParser.combinar(nueva, L, f.name);
-        hechos.push(`${f.name}: ${L.tipo === "resultados" ? "Resultado de ventas " + L.anio + " (corte " + MESES[L.corte - 1] + ")" : L.tipo === "clientes" ? `ventas por cliente, ${L.filas.length} registros en ${L.meses.length} meses${L.sinCartera ? ` (${L.sinCartera} renglones sin cartera)` : ""}${Object.keys(L.nombres).length ? ` · vendedores sin cartera reconocida: ${Object.values(L.nombres).slice(0, 4).join(", ")}` : ""}` : "Tablero " + MESES[L.mes - 1] + " " + L.anio}`);
+        hechos.push(`${f.name}: ${L.tipo === "resultados" ? "Resultado de ventas " + L.anio + " (corte " + MESES[L.corte - 1] + ")" : L.tipo === "facturas" ? `facturas de Odoo del ${L.desde} al ${L.hasta} (${L.docs.length} documentos${L.canceladas ? `, ${L.canceladas} renglones cancelados` : ""})` : L.tipo === "clientes" ? `ventas por cliente, ${L.filas.length} registros en ${L.meses.length} meses${L.sinCartera ? ` (${L.sinCartera} renglones sin cartera)` : ""}${Object.keys(L.nombres).length ? ` · vendedores sin cartera reconocida: ${Object.values(L.nombres).slice(0, 4).join(", ")}` : ""}` : "Tablero " + MESES[L.mes - 1] + " " + L.anio}`);
         if ($("#limpiar-ed") && $("#limpiar-ed").checked) {
           const pref = L.anio + "-";
           if (L.tipo === "resultados") for (const k of Object.keys(G.ed.h)) if (k.startsWith(pref)) delete G.ed.h[k];

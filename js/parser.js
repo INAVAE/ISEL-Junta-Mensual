@@ -286,17 +286,72 @@
     return null;
   }
 
+
+  /* ------------------------------------- Estadísticas de facturas (Odoo) ---
+     account.invoice.report exportado a Excel: un renglón por línea de factura.
+     Se agrupa por documento (INV / RINV) con fecha, cliente, cartera, subtotal,
+     estado de pago y, en notas de crédito, la factura que revierten. */
+  function encabezadoOdoo(F) {
+    for (let i = 0; i < Math.min(F.length, 6); i++) {
+      const f = (F[i] || []).map((x) => norm(x).toLowerCase());
+      if (f.includes("movimiento") && f.includes("fecha de factura") && f.includes("subtotal")) {
+        const c = (n) => f.indexOf(n);
+        return { fila: i, mov: c("movimiento"), fecha: c("fecha de factura"), cli: c("contacto"), vend: c("vendedor"), sub: c("subtotal"),
+          prod: c("producto"), pago: c("estado del pago"), estado: c("estado de la factura"), tipo: c("tipo de movimiento") };
+      }
+    }
+    return null;
+  }
+  function leerFacturasOdoo(libro, opciones = {}) {
+    if (!libro.filas) return null;
+    for (const hoja of libro.hojas) {
+      const F = libro.filas(hoja);
+      const h = encabezadoOdoo(F);
+      if (!h) continue;
+      const docs = new Map(); let lineas = 0, canceladas = 0;
+      for (let i = h.fila + 1; i < F.length; i++) {
+        const r = F[i] || [];
+        const mov = String(r[h.mov] ?? "").trim(); if (!mov) continue;
+        const d = fechaTexto(r[h.fecha]); if (!d) continue;
+        const k = mov.split(" ")[0];
+        const est = norm(r[h.estado]).toLowerCase();
+        if (/cancel/.test(est)) canceladas++;
+        let x = docs.get(k);
+        if (!x) {
+          const ref = (mov.match(/(?:Reversi[oó]n de|Reversal of):?\s*([A-Z]+\/\d{4}\/\d+)/i) || [])[1] || "";
+          const tipo = /nota de cr|refund|credit/i.test(String(r[h.tipo] ?? "")) || k.startsWith("RINV") ? "N" : "F";
+          x = { k, f: iso(d), cli: normCliente(r[h.cli]) || "SIN CLIENTE", cart: resolverCartera(r[h.vend], opciones.catalogo).k, sub: 0, t: tipo,
+            pago: String(r[h.pago] ?? ""), ref, est: /cancel/.test(est) ? "C" : "", prods: new Set() };
+          docs.set(k, x);
+        }
+        x.sub += num(r[h.sub]) || 0; lineas++;
+        const pr = (String(r[h.prod] ?? "").match(/^\[([^\]]+)\]/) || [])[1];
+        if (pr) x.prods.add(pr.trim().toUpperCase());
+      }
+      if (!docs.size) continue;
+      const lista = [...docs.values()].map((x) => {
+        const ant = x.t === "N" && x.prods.size > 0 && [...x.prods].every((p) => p === "CRED_ANT" || p === "CRED_DESC") ? 1 : 0;
+        return [x.k, x.f, x.cli, x.cart, r2(x.sub), x.t, x.pago, x.ref, ant, x.est];
+      });
+      const fechas = lista.map((x) => x[1]).sort();
+      return { tipo: "facturas", hoja, docs: lista, desde: fechas[0], hasta: fechas[fechas.length - 1], lineas, canceladas };
+    }
+    return null;
+  }
+
   function leer(libro, opciones) {
     const t = tipoDeLibro(libro);
     if (t === "resultados") return leerResultados(libro);
     if (t === "tablero") return leerTablero(libro);
+    const fo = leerFacturasOdoo(libro, opciones);
+    if (fo) return fo;
     const c = leerClientes(libro, opciones);
     if (c) return c;
     throw new Error("No reconocí el archivo: no es el Resultado de ventas, ni el Tablero ISEL, ni una lista de ventas por cliente (necesita columnas de cliente y monto).");
   }
 
   /* Combina lo leído en la base de datos de la página. Lo más reciente gana. */
-  function combinar(base, lectura, archivo) {
+  function combinar(base, lectura, archivo, opciones = {}) {
     const D = base;
     D.fuentes = (D.fuentes || []).filter((f) => f.archivo !== archivo);
     if (lectura.tipo === "resultados") {
@@ -317,6 +372,23 @@
       for (const campo of ["tablero", "clientes", "tipoCliente", "canal"]) { D[campo] = D[campo] || {}; D[campo][lectura.clave] = lectura[campo]; }
       D.lineasAnual = D.lineasAnual || {}; D.lineasAnual[a] = lectura.lineasAnual;
       D.fuentes.push({ archivo, tipo: "Tablero ISEL " + lectura.clave, corte: lectura.mes });
+    } else if (lectura.tipo === "facturas") {
+      // Une con lo que ya había: se reemplazan las fechas que cubre el archivo y los documentos que trae
+      const prev = D.facturas || { docs: [] };
+      const nuevos = new Set(lectura.docs.map((x) => x[0]));
+      const docs = prev.docs.filter((x) => !nuevos.has(x[0]) && (x[1] < lectura.desde || x[1] > lectura.hasta)).concat(lectura.docs);
+      D.facturas = { docs, desde: [prev.desde, lectura.desde].filter(Boolean).sort()[0], hasta: [prev.hasta, lectura.hasta].filter(Boolean).sort().pop(), archivo, cargado: (opciones.ahora || new Date()).toISOString() };
+      // Foto de cada mes cerrado la primera vez que se ve, para comparar en cargas posteriores
+      const ahora = opciones.ahora || new Date();
+      const mesActual = ahora.getFullYear() * 100 + ahora.getMonth() + 1;
+      D.fotos = D.fotos || {};
+      const porMes = {};
+      for (const x of lectura.docs) { const k = x[1].slice(0, 7); (porMes[k] = porMes[k] || []).push([x[0], x[4], x[3], x[2]]); }
+      for (const [k, L] of Object.entries(porMes)) {
+        const ym = +k.slice(0, 4) * 100 + +k.slice(5, 7);
+        if (ym < mesActual && !D.fotos[k] && (k > lectura.desde.slice(0, 7) || lectura.desde.endsWith("-01"))) D.fotos[k] = { tomada: ahora.toISOString(), archivo, docs: L };
+      }
+      D.fuentes.push({ archivo, tipo: `Facturas Odoo ${lectura.desde} a ${lectura.hasta}` });
     } else if (lectura.tipo === "clientes") {
       const vc = D.ventasCliente || { filas: [], nombres: {} };
       const nuevos = new Set(lectura.meses);
@@ -339,6 +411,6 @@
     };
   }
 
-  const API = { leer, combinar, libroDeSheetJS, tipoDeLibro, colNum, colLetra, leerClientes, norm };
+  const API = { leer, combinar, libroDeSheetJS, tipoDeLibro, colNum, colLetra, leerClientes, leerFacturasOdoo, norm };
   if (typeof module !== "undefined" && module.exports) module.exports = API; else global.ISELParser = API;
 })(typeof window !== "undefined" ? window : globalThis);

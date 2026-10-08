@@ -13,7 +13,7 @@ Página para presentar los resultados de ventas en la junta mensual, en el orden
 | 06 | Portafolio | ¿Dónde crecemos o perdemos? (líneas) |
 | 07 | Pronóstico | ¿Qué viene? (meta, forecast, gap, pipeline, cierre del año) |
 | 08 | Acción | ¿Qué vamos a hacer? (compromisos con responsable, fecha e indicador) |
-| 09 | Otros | Facturas canceladas |
+| 09 | Otros | Facturas que afectaron el cierre (re-fechadas, canceladas, notas de crédito) |
 
 Cada módulo tiene el botón **⤢ Ampliar**: lo muestra a pantalla completa con tipografía y gráficas
 escaladas al tamaño de la pantalla; con ← y → se pasa al módulo anterior o siguiente y Esc cierra.
@@ -49,7 +49,18 @@ concentración de carteras y clientes, movimiento de clientes, tipo de cliente y
 el *Resultado de ventas* del año y el *Tablero ISEL* actualizados. La página los lee en el
 navegador; los archivos no se suben a ningún lado. Lo cargado queda en ese navegador.
 
-**Ventas por cliente:** para ver la cartera de cada cliente, desglosar clientes atendidos por
+**Facturas de Odoo:** cada mes carga también *Estadísticas de facturas* (Odoo → Contabilidad →
+Reportes, exportado a Excel con todas las columnas). Con él:
+
+- El bloque 09 detecta las facturas emitidas con folio del mes que se cancelaron y se volvieron a
+  emitir con fecha de otro mes (re-fechadas), los folios faltantes (canceladas), las notas de crédito
+  posteriores que no son de anticipo y las diferencias por cartera entre el Resultado de ventas y Odoo.
+- La primera vez que se ve un mes ya cerrado se guarda una **foto** de sus facturas; en cada carga
+  siguiente se comparan y aparecen las canceladas o modificadas con su monto.
+- Las re-fechadas afectan el cierre del mes, no el acumulado anual, salvo las que cambian de año.
+- El análisis de clientes usa este reporte para la cartera de cada cliente y cualquier periodo.
+
+**Ventas por cliente (otra fuente):** para ver la cartera de cada cliente, desglosar clientes atendidos por
 varias carteras y filtrar el movimiento de clientes por cualquier periodo, carga también un reporte
 de ventas por cliente de SAE u Odoo (Excel o CSV) con fecha, cliente, cartera o vendedor e importe.
 Sin ese archivo se usan los listados del Tablero (un trimestre fijo) y la cartera se asigna a mano.

@@ -1624,15 +1624,26 @@
     try {
       msg("Preparando el lector de Excel…");
       await cargarSheetJS();
-      const nueva = JSON.parse(JSON.stringify(BASE));
+      const nueva = BASE ? JSON.parse(JSON.stringify(BASE)) : { version: 1 };
       const hechos = [];
+      // Primero se leen todos; luego se combinan en orden (resultados → tablero → facturas/clientes)
+      const leidos = [];
       for (const f of files) {
         msg(`Leyendo ${f.name}…`);
         const buf = await f.arrayBuffer();
-        const wb = XLSX.read(buf, { type: "array", cellDates: true, sheetRows: 1600 });
-        const catalogo = Object.entries(IDX.cartNom).map(([k, n]) => ({ k, n }));
-        const msf = $("#mes-sin-fecha"), asf = $("#anio-sin-fecha");
-        const L = ISELParser.leer(ISELParser.libroDeSheetJS(wb), { catalogo, mesSinFecha: msf && asf && $("#sin-fecha-det").open ? [+asf.value, +msf.value] : null });
+        // Los reportes de la junta se leen hasta 1,600 filas (traen hojas con un millón de filas vacías);
+        // un reporte de facturas o de clientes se vuelve a leer completo.
+        let wb = XLSX.read(buf, { type: "array", cellDates: true, sheetRows: 1600 });
+        let tipo = ISELParser.tipoDeLibro(ISELParser.libroDeSheetJS(wb));
+        if (!tipo) { msg(`Leyendo ${f.name} completo…`); wb = XLSX.read(buf, { type: "array", cellDates: true }); }
+        leidos.push({ f, libro: ISELParser.libroDeSheetJS(wb), tipo });
+      }
+      const orden = { resultados: 0, tablero: 1 };
+      leidos.sort((a, b) => (orden[a.tipo] ?? 2) - (orden[b.tipo] ?? 2));
+      for (const { f, libro } of leidos) {
+        const catalogo = Object.values(Object.fromEntries((nueva.hechos || []).filter((h) => h.d === "cartera" && h.n && h.n !== "(sin asignar)").map((h) => [h.k, { k: h.k, n: h.n }])));
+        const msf = $("#mes-sin-fecha"), asf = $("#anio-sin-fecha"), det = $("#sin-fecha-det");
+        const L = ISELParser.leer(libro, { catalogo, mesSinFecha: msf && asf && det && det.open ? [+asf.value, +msf.value] : null });
         ISELParser.combinar(nueva, L, f.name);
         hechos.push(`${f.name}: ${L.tipo === "resultados" ? "Resultado de ventas " + L.anio + " (corte " + MESES[L.corte - 1] + ")" : L.tipo === "facturas" ? `facturas de Odoo del ${L.desde} al ${L.hasta} (${L.docs.length} documentos${L.canceladas ? `, ${L.canceladas} renglones cancelados` : ""})` : L.tipo === "clientes" ? `ventas por cliente, ${L.filas.length} registros en ${L.meses.length} meses${L.sinCartera ? ` (${L.sinCartera} renglones sin cartera)` : ""}${Object.keys(L.nombres).length ? ` · vendedores sin cartera reconocida: ${Object.values(L.nombres).slice(0, 4).join(", ")}` : ""}` : "Tablero " + MESES[L.mes - 1] + " " + L.anio}`);
         if ($("#limpiar-ed") && $("#limpiar-ed").checked) {
@@ -1641,6 +1652,7 @@
           if (L.tipo === "tablero") { for (const k of Object.keys(G.ed.s)) if (k.startsWith(pref)) delete G.ed.s[k]; delete G.ed.c[L.clave]; }
         }
       }
+      if (!nueva.hechos || !nueva.hechos.length) throw new Error("Falta el Resultado de ventas: es la base de la página. Selecciónalo junto con los demás archivos.");
       if (NUBE) { await guardarBase(nueva, msg); }
       BASE = nueva; FAC = null; VCF = null;
       if (!NUBE) try { localStorage.setItem(LS_BASE, JSON.stringify(BASE)); G_BASE_LOCAL = true; } catch (e) { toast("Los datos se cargaron, pero el navegador no permitió guardarlos: se perderán al cerrar."); }

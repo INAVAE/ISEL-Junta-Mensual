@@ -37,12 +37,19 @@
   }
 
   /* ----------------------------------------------------- almacenamiento local */
-  const LS = "isel-junta-mensual-v1", LS_BASE = "isel-junta-mensual-base-v1", LS_PASS = "isel-junta-mensual-clave";
-  const vacio = () => ({ ed: { h: {}, k: {}, c: {}, s: {} }, juntas: {}, compromisos: [], prefs: {} });
+  const LS = "isel-junta-mensual-v1", LS_BASE = "isel-junta-mensual-base-v1", LS_PASS = "isel-junta-mensual-clave", LS_PREFS = "isel-jm-prefs";
+  const vacio = () => ({ ed: { h: {}, k: {}, c: {}, s: {} }, juntas: {}, compromisos: [], prefs: {}, analisis: {}, cliCart: {}, campanas: {}, oport: {}, config: {} });
+  // Modo nube (Supabase) cuando la página trae configuración y no datos incrustados
+  const CONF = window.DATOS_BASE ? null : window.JM_CONFIG || null;
+  let NUBE = null, YO = null;
+  const esAdmin = () => (NUBE ? !!(YO && YO.rol === "admin") : window.ROL_PRUEBA !== "lector");
   let G = vacio();
-  try { const x = JSON.parse(localStorage.getItem(LS) || "null"); if (x) G = Object.assign(vacio(), x, { ed: Object.assign(vacio().ed, x.ed || {}) }); } catch (e) { /* sin almacenamiento */ }
+  if (!CONF) try { const x = JSON.parse(localStorage.getItem(LS) || "null"); if (x) G = Object.assign(vacio(), x, { ed: Object.assign(vacio().ed, x.ed || {}) }); } catch (e) { /* sin almacenamiento */ }
+  try { G.prefs = Object.assign({}, G.prefs, JSON.parse(localStorage.getItem(LS_PREFS) || "{}")); } catch (e) {}
   let guardadoPend = null;
   function guardar() {
+    try { localStorage.setItem(LS_PREFS, JSON.stringify(G.prefs || {})); } catch (e) {}
+    if (NUBE) { if (esAdmin()) programarSync(); return; }
     clearTimeout(guardadoPend);
     guardadoPend = setTimeout(() => {
       try { localStorage.setItem(LS, JSON.stringify(G)); } catch (e) { toast("Este navegador no permite guardar. Descarga un respaldo para no perder cambios."); }
@@ -199,7 +206,7 @@
 
   /* --------------------------------------------------------------- gráficas */
   const CH = new Map(); let PEND = [];
-  function chart(id, cfg) { PEND.push(() => { const el = document.getElementById(id); if (!el || !window.Chart) return; if (CH.has(id)) CH.get(id).destroy(); CH.set(id, new Chart(el, cfg)); }); }
+  function chart(id, cfg) { PEND.push(() => { const el = document.getElementById(id); if (!el || !window.Chart) return; if (CH.has(id)) CH.get(id).destroy(); agregarTendencias(cfg); CH.set(id, new Chart(el, cfg)); }); }
   function colores() {
     return { s1: css("--s1"), s2: css("--s2"), s3: css("--s3"), s4: css("--s4"), s5: css("--s5"), s6: css("--s6"), meta: css("--meta"), ok: css("--ok"), warn: css("--warn"), bad: css("--bad"), ink: css("--ink"), ink2: css("--ink2"), muted: css("--muted"), grid: css("--grid"), panel: css("--panel"), signal: css("--signal") };
   }
@@ -385,9 +392,9 @@
     ];
     registrarMs("tend-series", series);
     const ds = [];
-    if (pasa("tend-series", "venta")) ds.push({ type: "bar", label: `Venta ${a}`, data: venta, backgroundColor: meses.map((m) => (enPer.has(m) ? C.s1 : alfa(C.s1, 0.45))), order: 2 });
+    if (pasa("tend-series", "venta")) ds.push({ type: "bar", label: `Venta ${a}`, tend: "M", tendColor: C.s1, borderColor: C.s1, data: venta, backgroundColor: meses.map((m) => (enPer.has(m) ? C.s1 : alfa(C.s1, 0.45))), order: 2 });
     if (pasa("tend-series", "meta")) ds.push({ type: "line", label: `Meta ${a}`, data: meta, borderColor: C.meta, backgroundColor: C.meta, borderDash: [5, 4], pointRadius: 0, order: 1 });
-    if (pasa("tend-series", "prev")) ds.push({ type: "line", label: `Venta ${a - 1}`, data: prev, borderColor: C.s2, backgroundColor: C.s2, pointRadius: 3, order: 0 });
+    if (pasa("tend-series", "prev")) ds.push({ type: "line", label: `Venta ${a - 1}`, tend: "M", data: prev, borderColor: C.s2, backgroundColor: C.s2, pointRadius: 3, order: 0 });
     chart("g-tend", { data: { labels: MC, datasets: ds }, options: { scales: { y: ejeM({ beginAtZero: true }), x: { grid: { display: false } } }, plugins: { tooltip: { callbacks: { label: tipM, afterBody: (it) => { const m = it[0].dataIndex; const r = div(venta[m], meta[m]); return fin(r) ? `Cumplimiento: ${fmtP(r)}` : ""; } } } } } });
 
     // Déficit acumulado por año
@@ -398,12 +405,12 @@
     const dsD = aniosMeta.filter((y) => (UI.filtros["tend-anios"] ? pasa("tend-anios", String(y)) : y >= a - 1 && y <= a)).map((y, i) => {
       let acM = 0, acL = 0;
       const lim = Math.max(cerrado(y), y === a ? c.Jm : 0);
-      return { label: `Déficit ${y}`, data: meses.map((m) => { const t = tot(y, m); if (!t || m > lim) return null; acM += t.meta; acL += t.log; return acL - acM; }), borderColor: y === a ? C.s1 : paleta[(i + 1) % 4], backgroundColor: y === a ? alfa(C.s1, 0.12) : "transparent", fill: y === a ? "origin" : false };
+      return { label: `Déficit ${y}`, data: meses.map((m) => { const t = tot(y, m); if (!t || m > lim) return null; acM += t.meta; acL += t.log; return acL - acM; }), borderColor: y === a ? C.s1 : paleta[(i + 1) % 4], backgroundColor: y === a ? alfa(C.s1, 0.12) : "transparent", fill: y === a ? "origin" : false, tend: y === a ? "M" : false };
     });
     chart("g-def", { type: "line", data: { labels: MC, datasets: dsD }, options: { scales: { y: ejeM(), x: { grid: { display: false } } }, plugins: { tooltip: { callbacks: { label: tipM } } } } });
     // Brecha de cada mes
     const brecha = meses.map((m) => (venta[m - 1] !== null && meta[m - 1] !== null ? venta[m - 1] - meta[m - 1] : null));
-    chart("g-brecha", { type: "bar", data: { labels: MC, datasets: [{ label: "Brecha del mes", data: brecha, backgroundColor: brecha.map((v) => (v >= 0 ? C.ok : C.bad)) }] }, options: { plugins: { legend: { display: false }, tooltip: { callbacks: { label: (x) => `${x.parsed.y >= 0 ? "Recupera" : "Amplía"} ${fmt$(Math.abs(x.parsed.y))}` } } }, scales: { y: ejeM(), x: { grid: { display: false } } } } });
+    chart("g-brecha", { type: "bar", data: { labels: MC, datasets: [{ label: "Brecha del mes", tend: "M", borderColor: C.ink2, data: brecha, backgroundColor: brecha.map((v) => (v >= 0 ? C.ok : C.bad)) }] }, options: { plugins: { legend: { display: false }, tooltip: { callbacks: { label: (x) => `${x.parsed.y >= 0 ? "Recupera" : "Amplía"} ${fmt$(Math.abs(x.parsed.y))}` } } }, scales: { y: ejeM(), x: { grid: { display: false } } } } });
 
     // Velocidad semanal
     const fin_ = new Date(c.L[c.L.length - 1][0], c.L[c.L.length - 1][1], 0);
@@ -423,7 +430,7 @@
       const ultimo = deltas[deltas.length - 1];
       const semRest = Math.max(1, 52 - ultimo.s);
       const defAnual = (sem_[sem_.length - 1].venta_acum) - c.mAnual;
-      chart("g-vel", { type: "bar", data: { labels: deltas.map((x) => "S" + x.s), datasets: [{ label: "Cambio del déficit", data: deltas.map((x) => x.d), backgroundColor: deltas.map((x) => alfa(x.d >= 0 ? C.ok : C.bad, enRango(x) ? 1 : 0.4)) }] }, options: { plugins: { legend: { display: false }, tooltip: { callbacks: { title: (it) => `Semana ${deltas[it[0].dataIndex].s} · ${deltas[it[0].dataIndex].f}`, label: (x) => `${x.parsed.y >= 0 ? "Recupera" : "Amplía"} ${fmt$(Math.abs(x.parsed.y))}`, afterLabel: (x) => `Déficit acumulado ${fmt$(deltas[x.dataIndex].def)}` } } }, scales: { y: ejeM(), x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 14 } } } } });
+      chart("g-vel", { type: "bar", data: { labels: deltas.map((x) => "S" + x.s), datasets: [{ label: "Cambio del déficit", tend: "M", tendPaso: "sem", borderColor: C.ink2, data: deltas.map((x) => x.d), backgroundColor: deltas.map((x) => alfa(x.d >= 0 ? C.ok : C.bad, enRango(x) ? 1 : 0.4)) }] }, options: { plugins: { legend: { display: false }, tooltip: { callbacks: { title: (it) => `Semana ${deltas[it[0].dataIndex].s} · ${deltas[it[0].dataIndex].f}`, label: (x) => `${x.parsed.y >= 0 ? "Recupera" : "Amplía"} ${fmt$(Math.abs(x.parsed.y))}`, afterLabel: (x) => `Déficit acumulado ${fmt$(deltas[x.dataIndex].def)}` } } }, scales: { y: ejeM(), x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 14 } } } } });
       html2 = `<div><div class="sub">Velocidad de recuperación del déficit · semanal</div>
         <div class="tira">
           <div class="celda"><label>Semanas recuperando</label><div class="valor pos">${rec}</div><small>de ${rec + amp} con captura</small></div>
@@ -555,7 +562,7 @@
     const minis = opK.filter((o) => pasa("diag-kpis", o.v)).map((o, i) => {
       const id = "g-k-" + o.v, meta = kpi(c.Ja, c.Jm, o.v).meta;
       const esX = o.v === "margen";
-      chart(id, { type: "line", data: { labels: W.map((w) => "S" + w.s), datasets: [{ label: o.t, data: W.map((w) => w[o.v]), borderColor: [C.s1, C.s2, C.s3][i % 3], backgroundColor: [C.s1, C.s2, C.s3][i % 3], pointRadius: 2 }, ...(fin(meta) ? [{ label: "Meta", data: W.map(() => meta), borderColor: C.meta, borderDash: [5, 4], pointRadius: 0 }] : [])] },
+      chart(id, { type: "line", data: { labels: W.map((w) => "S" + w.s), datasets: [{ label: o.t, tend: esX ? "x" : "%", tendPaso: "sem", data: W.map((w) => w[o.v]), borderColor: [C.s1, C.s2, C.s3][i % 3], backgroundColor: [C.s1, C.s2, C.s3][i % 3], pointRadius: 2 }, ...(fin(meta) ? [{ label: "Meta", data: W.map(() => meta), borderColor: C.meta, borderDash: [5, 4], pointRadius: 0 }] : [])] },
         options: { plugins: { legend: { display: false }, tooltip: { callbacks: { label: (x) => `${x.dataset.label}: ${esX ? fmtX(x.parsed.y) : fmtP(x.parsed.y, 1)}` } } }, scales: { y: esX ? { grid: { color: C.grid }, ticks: { callback: (v) => v + "×" } } : ejeP({ beginAtZero: true }), x: { grid: { display: false }, ticks: { maxTicksLimit: 8, maxRotation: 0 } } } } });
       return `<div><div class="sub" style="font-size:14px">${o.t}</div><div class="graf baja"><canvas id="${id}" role="img" aria-label="${o.t} semanal"></canvas></div></div>`;
     });
@@ -585,7 +592,7 @@
     const neto = mov.reduce((s, x) => s + (x[1] || 0), 0);
     chart("g-mov", { type: "bar", data: { labels: mov.map((x) => x[0]).concat("Crecimiento neto"), datasets: [{ label: "Monto", data: mov.map((x) => x[1]).concat(neto), backgroundColor: mov.map((x) => ((x[1] || 0) >= 0 ? C.ok : C.bad)).concat(neto >= 0 ? C.s1 : C.s2) }] }, options: { plugins: { legend: { display: false }, tooltip: { callbacks: { label: (x) => fmt$(x.parsed.y) } } }, scales: { y: ejeM(), x: { grid: { display: false } } } } });
     const men = d.mensual || [];
-    chart("g-mezcla", { type: "bar", data: { labels: men.map((x) => MC[x.m - 1]), datasets: [{ label: "Venta de clientes retenidos", data: men.map((x) => x.ir_monto), backgroundColor: C.s1 }, { label: "Venta de clientes ganados", data: men.map((x) => x.ig_monto), backgroundColor: C.s3 }] }, options: { scales: { x: { stacked: true, grid: { display: false } }, y: ejeP({ stacked: true, max: 1 }) }, plugins: { tooltip: { callbacks: { label: (x) => `${x.dataset.label}: ${fmtP(x.parsed.y)}`, footer: (it) => `Clientes activos: ${men[it[0].dataIndex].clientes}` } } } } });
+    chart("g-mezcla", { type: "bar", data: { labels: men.map((x) => MC[x.m - 1]), datasets: [{ label: "Venta de clientes retenidos", data: men.map((x) => x.ir_monto), backgroundColor: C.s1, tend: "%", borderColor: C.ink }, { label: "Venta de clientes ganados", data: men.map((x) => x.ig_monto), backgroundColor: C.s3 }] }, options: { scales: { x: { stacked: true, grid: { display: false } }, y: ejeP({ stacked: true, max: 1 }) }, plugins: { tooltip: { callbacks: { label: (x) => `${x.dataset.label}: ${fmtP(x.parsed.y)}`, footer: (it) => `Clientes activos: ${men[it[0].dataIndex].clientes}` } } } } });
     let canal = "";
     if (tc) {
       const t = tc.datos, total = (t.usuario || 0) + (t.reventa || 0);
@@ -649,7 +656,7 @@
       else { real.push(null); acP += m === c.Jm + 1 && fin(fc) ? fc : (ritmo || 0); proy.push(acP); }
     });
     const cierre = acP, cumpCierre = div(cierre, c.mAnual);
-    chart("g-proy", { type: "line", data: { labels: MC, datasets: [{ label: "Venta acumulada real", data: real, borderColor: C.s1, backgroundColor: C.s1 }, { label: "Proyección", data: proy, borderColor: C.s1, borderDash: [6, 4], backgroundColor: C.s1, pointStyle: "rectRot" }, { label: "Meta acumulada", data: metaA, borderColor: C.meta, backgroundColor: C.meta, pointRadius: 0, borderDash: [2, 3] }] }, options: { scales: { y: ejeM(), x: { grid: { display: false } } }, plugins: { tooltip: { callbacks: { label: tipM } } } } });
+    chart("g-proy", { type: "line", data: { labels: MC, datasets: [{ label: "Venta acumulada real", data: real, borderColor: C.s1, backgroundColor: C.s1, tend: "M", tendHasta: 11, tendNombre: "Ritmo lineal del año", tendColor: C.s3 }, { label: "Proyección", data: proy, borderColor: C.s1, borderDash: [6, 4], backgroundColor: C.s1, pointStyle: "rectRot" }, { label: "Meta acumulada", data: metaA, borderColor: C.meta, backgroundColor: C.meta, pointRadius: 0, borderDash: [2, 3] }] }, options: { scales: { y: ejeM(), x: { grid: { display: false } } }, plugins: { tooltip: { callbacks: { label: tipM } } } } });
     const cuerpo = `<div class="grid-6-4"><div>
         <div class="sub">${MESES[Nm - 1]} ${Na} · pronóstico</div>
         <div class="tira" style="grid-template-columns:repeat(3,minmax(0,1fr))">
@@ -791,7 +798,7 @@
       // Serie mensual de venta re-fechada fuera de su mes
       const meses = Array.from({ length: Math.max(cerrado(c.Ja), c.Jm) }, (_, i) => i + 1);
       const serie = meses.map((mm) => { const X = afectaciones(c.Ja, mm); return X ? X.suma(X.salieron.filter(ok)) : 0; });
-      chart("g-refac", { type: "bar", data: { labels: meses.map((mm) => MC[mm - 1]), datasets: [{ label: "Venta re-fechada fuera de su mes", data: serie, backgroundColor: meses.map((mm) => (mm === c.Jm ? C.s2 : alfa(C.s2, 0.45))) }] }, options: { plugins: { legend: { display: false }, tooltip: { callbacks: { label: (x) => `${fmt$(x.parsed.y)} · ${fmtP(div(x.parsed.y, tot(c.Ja, meses[x.dataIndex])?.log), 1)} de la venta del mes` } } }, scales: { y: ejeM({ beginAtZero: true }), x: { grid: { display: false } } } } });
+      chart("g-refac", { type: "bar", data: { labels: meses.map((mm) => MC[mm - 1]), datasets: [{ label: "Venta re-fechada fuera de su mes", tend: "M", borderColor: C.ink2, data: serie, backgroundColor: meses.map((mm) => (mm === c.Jm ? C.s2 : alfa(C.s2, 0.45))) }] }, options: { plugins: { legend: { display: false }, tooltip: { callbacks: { label: (x) => `${fmt$(x.parsed.y)} · ${fmtP(div(x.parsed.y, tot(c.Ja, meses[x.dataIndex])?.log), 1)} de la venta del mes` } } }, scales: { y: ejeM({ beginAtZero: true }), x: { grid: { display: false } } } } });
       const fotoHtml = !A.foto ? `<p class="nota-pie">Todavía no hay foto de ${MESES[c.Jm - 1]}: se guarda la primera vez que se carga el reporte con el mes ya cerrado.</p>`
         : `<div><div class="sub">Cambios contra la foto del cierre <span class="der">foto del ${new Date(A.foto.tomada).toLocaleDateString("es-MX", { dateStyle: "medium" })}</span></div>
           ${A.foto.canceladas.length || A.foto.cambiaron.length || A.foto.nuevas.length ? `<div class="tabla-wrap"><table class="t"><thead><tr><th>Factura</th><th>Qué pasó</th><th>Cliente</th><th>Cartera</th><th class="n">En la foto</th><th class="n">Hoy</th></tr></thead><tbody>
@@ -846,7 +853,7 @@
     const sel = anios.filter((a) => pasa("hist-anios", String(a)));
     const pal = [C.meta, C.s4, C.s2, C.s1, C.s3, C.s5];
     const val = (a, m) => { const t = tot(a, m); const lim = cerrado(a); if (t && m <= lim) return t.log; if (t) return null; return IDX.hist.get(`${a}-${m}`) ?? null; };
-    chart("g-hist", { type: "line", data: { labels: MC, datasets: sel.map((a) => ({ label: String(a), data: MC.map((_, i) => val(a, i + 1)), borderColor: pal[(anios.indexOf(a) + (6 - anios.length)) % 6] || C.s1, backgroundColor: pal[(anios.indexOf(a) + (6 - anios.length)) % 6] || C.s1, borderWidth: a === c.Ja ? 3 : 2 })) }, options: { scales: { y: ejeM(), x: { grid: { display: false } } }, plugins: { tooltip: { callbacks: { label: tipM } } } } });
+    chart("g-hist", { type: "line", data: { labels: MC, datasets: sel.map((a) => ({ label: String(a), tend: "M", data: MC.map((_, i) => val(a, i + 1)), borderColor: pal[(anios.indexOf(a) + (6 - anios.length)) % 6] || C.s1, backgroundColor: pal[(anios.indexOf(a) + (6 - anios.length)) % 6] || C.s1, borderWidth: a === c.Ja ? 3 : 2 })) }, options: { scales: { y: ejeM(), x: { grid: { display: false } } }, plugins: { tooltip: { callbacks: { label: tipM } } } } });
     // Mapa de calor año × mes
     const todos = sel.flatMap((a) => MC.map((_, i) => val(a, i + 1))).filter(fin);
     const mx = Math.max(...todos, 1), mn = Math.min(...todos, 0);
@@ -1261,7 +1268,7 @@
     const c = ctx();
     G.analisis = G.analisis || {};
     let A = G.analisis[c.clave];
-    if (!A) { A = G.analisis[c.clave] = generarAnalisis(); guardar(); }
+    if (!A) { A = generarAnalisis(); if (esAdmin()) { G.analisis[c.clave] = A; guardar(); } }
     const fechaGen = new Date(A.generado).toLocaleString("es-MX", { dateStyle: "medium", timeStyle: "short" });
     const hall = A.hallazgos.map((h, i) => `<div class="hallazgo ${SEV[h.sev]?.[1] || "na"}"><div class="hallazgo-cab"><select class="estado-sel" data-an="hallazgos" data-i="${i}" data-campo="sev" aria-label="Severidad">${Object.entries(SEV).map(([k, [t]]) => `<option value="${k}" ${h.sev === k ? "selected" : ""}>${t}</option>`).join("")}</select>
         <input class="campo titulo" data-an="hallazgos" data-i="${i}" data-campo="titulo" value="${esc(h.titulo)}" aria-label="Título del hallazgo"><button class="restaurar" data-an-borrar="hallazgos" data-i="${i}" type="button" title="Quitar">✕</button></div>
@@ -1315,8 +1322,10 @@
     const W = (BASE.semanal || []).filter((w) => w.a === ctx().Ja);
     const semTabla = `<div class="tabla-wrap"><table class="t"><thead><tr><th>Semana</th><th>Fecha</th><th class="n">Meta acumulada</th><th class="n">Venta acumulada</th><th class="n">Déficit</th></tr></thead><tbody>
       ${W.map((w) => { const e = G.ed.s[`${w.a}-${w.s}`] || {}; const va = fin(e.venta_acum) ? e.venta_acum : w.venta_acum, ma = fin(e.meta_acum) ? e.meta_acum : w.meta_acum; return `<tr><td class="mono">S${w.s}</td><td class="mono">${w.fecha}</td>${UI.modoEdicion ? celdaNum("s", `${w.a}-${w.s}`, "meta_acum", ma, fin(e.meta_acum)) + celdaNum("s", `${w.a}-${w.s}`, "venta_acum", va, fin(e.venta_acum)) : `<td class="n">${fmt$(ma)}</td><td class="n">${fmt$(va)}</td>`}<td class="n ${va - ma < 0 ? "neg" : "pos"}">${fin(va) ? fmt$(va - ma) : "—"}</td></tr>`; }).join("")}</tbody></table></div>`;
+    const fuentes = `<div class="tabla-wrap" style="max-height:none"><table class="t"><tbody>${(BASE.fuentes || []).map((f) => `<tr><td>${esc(f.tipo)}</td><td class="mono">${esc(f.archivo)}</td></tr>`).join("")}</tbody></table></div>`;
+    if (!esAdmin()) return `<section class="bloque"><header><h2>Datos de la página</h2><span class="pregunta">De dónde vienen las cifras</span></header><div class="bloque-cuerpo"><div class="sub">Fuentes en uso</div>${fuentes}<p class="nota-pie">Actualizado: ${BASE.generado ? new Date(BASE.generado).toLocaleString("es-MX") : "—"}. El administrador carga los reportes cada mes.</p></div></section>`;
     return `<section class="bloque"><header><h2>Datos de la página</h2><span class="pregunta">Fuentes, actualización mensual y respaldo</span></header><div class="bloque-cuerpo">
-      <div class="grid2"><div><div class="sub">Cargar reportes de Excel</div>
+      <div class="grid2"><div><div class="sub">Cargar reportes de Excel</div>${NUBE ? `<div class="aviso info" style="margin-bottom:10px">Lo que cargues aquí se guarda en el servidor y todos los usuarios lo verán.</div>` : ""}
         <p style="margin:0 0 10px">Cada mes selecciona el <b>Resultado de ventas</b> del año y el <b>Tablero ISEL</b> actualizados (.xlsm o .xlsx). La página reconoce cada archivo por sus hojas y reemplaza solo lo que trae ese archivo; lo demás se conserva.</p>
         <p style="margin:0 0 10px">Agrega también el reporte <b>Estadísticas de facturas</b> de Odoo (Contabilidad → Reportes, exportado a Excel con todas las columnas). Con él la página detecta las facturas re-fechadas o canceladas que afectaron cada cierre (bloque 09) y arma el análisis de clientes por cartera. ${BASE.facturas ? `<b>Cargado:</b> ${BASE.facturas.docs.length.toLocaleString("es-MX")} documentos del ${esc(BASE.facturas.desde)} al ${esc(BASE.facturas.hasta)}.` : ""}</p>
         <p style="margin:0 0 10px">Si no tienes ese reporte, sirve cualquier <b>reporte de ventas por cliente</b> de SAE u Odoo (Excel o CSV) con columnas de <b>fecha</b>, <b>cliente</b>, <b>cartera o vendedor</b> e <b>importe</b> (venta neta, subtotal o importe). Puede abarcar varios meses; se reemplazan solo los meses que trae. ${hayVC() ? `<b>Cargado:</b> ${new Set(vcFilas().map((f) => f[2])).size} clientes, ${new Set(vcFilas().map((f) => f[0] * 100 + f[1])).size} meses.` : ""}</p>
@@ -1328,9 +1337,9 @@
       </div><div><div class="sub">Fuentes en uso</div>
         <div class="tabla-wrap" style="max-height:none"><table class="t"><tbody>${(BASE.fuentes || []).map((f) => `<tr><td>${esc(f.tipo)}</td><td class="mono">${esc(f.archivo)}</td></tr>`).join("")}</tbody></table></div>
         <p class="nota-pie">Actualizado: ${BASE.generado ? new Date(BASE.generado).toLocaleString("es-MX") : "—"}${G_BASE_LOCAL ? " · con archivos cargados en este navegador" : ""}.</p>
-        ${G_BASE_LOCAL ? `<button class="btn chico peligro" data-base-reset type="button">${UI.confirmar === "base" ? "Confirmar: volver a los datos originales" : "Volver a los datos originales de la página"}</button>` : ""}</div></div>
+        ${G_BASE_LOCAL && !NUBE ? `<button class="btn chico peligro" data-base-reset type="button">${UI.confirmar === "base" ? "Confirmar: volver a los datos originales" : "Volver a los datos originales de la página"}</button>` : ""}</div></div>
       <div class="grid2"><div><div class="sub">Respaldo de compromisos, notas y cambios</div>
-        <p style="margin:0 0 10px">Todo lo que escribes se guarda en este navegador. Para usarlo en otra computadora, o para no perderlo, descarga un respaldo y cárgalo allá.</p>
+        <p style="margin:0 0 10px">${NUBE ? "Los compromisos, notas, campañas y cambios se guardan en el servidor. El respaldo sirve para conservar una copia o para traer lo capturado en la versión anterior de la página (se suma a lo que ya existe)." : "Todo lo que escribes se guarda en este navegador. Para usarlo en otra computadora, o para no perderlo, descarga un respaldo y cárgalo allá."}</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn prim" data-exportar type="button">Descargar respaldo</button><button class="btn" data-copiar-resp type="button">Copiar respaldo</button><label class="btn" for="archivo-resp">Cargar respaldo</label><input type="file" id="archivo-resp" accept=".json" hidden></div>
         <textarea class="respaldo" id="resp-texto" placeholder="También puedes pegar aquí el texto de un respaldo y presionar Cargar texto." style="margin-top:10px"></textarea>
         <div style="display:flex;gap:8px;margin-top:6px"><button class="btn chico" data-importar-txt type="button">Cargar texto</button></div>
@@ -1357,9 +1366,11 @@
       rango: `<label for="p-desde">Del</label><input type="date" id="p-desde" value="${P.desde}"><label for="p-hasta">al</label><input type="date" id="p-hasta" value="${P.hasta}">`,
     };
     return `<header class="top"><div class="top-in"><div class="marca"><strong>ISEL</strong><span>Junta mensual de resultados de ventas</span></div>
-      <nav class="tabs" role="tablist">${[["junta", "Junta mensual"], ["analisis", "Análisis adicional"], ["datos", "Datos"]].map(([v, t]) => `<button class="tab" role="tab" data-tab="${v}" aria-selected="${UI.tab === v}">${t}</button>`).join("")}</nav>
-      <button class="chip-btn" data-modo-ed aria-pressed="${UI.modoEdicion}" type="button">${UI.modoEdicion ? "✎ Modificando cifras" : "✎ Modificar cifras"}</button>
-      <button class="chip-btn" data-tema type="button" title="Cambiar tema claro / oscuro">◐</button></div>
+      <nav class="tabs" role="tablist">${[["junta", "Junta mensual"], ["analisis", "Análisis adicional"], ["campanas", "Campañas"], ["datos", "Datos"], ...(NUBE && esAdmin() ? [["usuarios", "Usuarios"]] : [])].map(([v, t]) => `<button class="tab" role="tab" data-tab="${v}" aria-selected="${UI.tab === v}">${t}</button>`).join("")}</nav>
+      ${esAdmin() ? `<button class="chip-btn" data-modo-ed aria-pressed="${UI.modoEdicion}" type="button">${UI.modoEdicion ? "✎ Modificando cifras" : "✎ Modificar cifras"}</button>` : `<span class="chip-rol">Solo lectura</span>`}
+      <button class="chip-btn" data-tendencias aria-pressed="${G.prefs.tendencias !== false}" type="button" title="Mostrar u ocultar las líneas de tendencia">↗ Tendencias</button>
+      <button class="chip-btn" data-tema type="button" title="Cambiar tema claro / oscuro">◐</button>
+      ${NUBE && YO ? `<span class="usuario-top"><span title="${esc(YO.email)}">${esc(YO.nombre || YO.email)}</span>${esAdmin() ? `<span id="estado-sync" data-e="${SYNC.estado}">${{ pendiente: "Guardando…", ok: "Guardado", error: "Sin guardar · reintentar" }[SYNC.estado]}</span>` : ""}<button class="chip-btn" type="button" data-mi-pass title="Cambiar mi contraseña">Contraseña</button><button class="chip-btn" type="button" data-salir>Salir</button></span>` : ""}</div>
       <div class="periodo"><div class="periodo-in"><label>Periodo</label>
         <div class="seg" role="group">${[["mes", "Mes"], ["trim", "Trimestre"], ["sem", "Semestre"], ["anio", "Año"], ["rango", "Personalizado"]].map(([v, t]) => `<button type="button" data-ptipo="${v}" aria-pressed="${P.tipo === v}">${t}</button>`).join("")}</div>
         ${P.tipo !== "rango" ? `<select id="p-anio" aria-label="Año">${anios.map((a) => `<option ${P.anio === a ? "selected" : ""}>${a}</option>`).join("")}</select>` : ""}${ctrl[P.tipo]}
@@ -1370,7 +1381,7 @@
   }
   const BLOQ_FN = [bSeguimiento, bMarcador, bTendencia, bContribucion, bDiagnostico, bSalud, bPortafolio, bPronostico, bAccion, bOtros];
   const SECC_FN = [sGeneral, sHistorico, sAnual, sCalor, sMezcla, sConcentracion, sClientes, sTipo, sSimulador];
-  const listaFoco = () => (UI.tab === "junta" ? BLOQUES.map((b, i) => ({ id: b[0], n: b[1], t: b[2], fn: BLOQ_FN[i] })) : SECC2.map((b, i) => ({ id: b[0], n: String.fromCharCode(65 + i), t: b[1], fn: SECC_FN[i] })));
+  const listaFoco = () => (UI.tab === "junta" ? BLOQUES.map((b, i) => ({ id: b[0], n: b[1], t: b[2], fn: BLOQ_FN[i] })) : UI.tab === "campanas" ? CAMP_SECC.map(([id, n, t, fn]) => ({ id, n, t, fn })) : SECC2.map((b, i) => ({ id: b[0], n: String.fromCharCode(65 + i), t: b[1], fn: SECC_FN[i] })));
   function botonAmpliar(id) {
     if (UI.foco) return "";
     return `<button class="btn chico ampliar" data-foco="${id}" type="button" title="Ver este módulo en grande">⤢ Ampliar</button>`;
@@ -1388,7 +1399,7 @@
         <span class="pres-titulo"><b>${x.n}</b> ${esc(x.t)} · <span class="mono">${esc(ctx().etiqueta)}</span></span>
         <button class="btn chico" data-pres-ir="${sig ? sig.id : ""}" ${sig ? "" : "disabled"} type="button" title="Módulo siguiente (→)">${sig ? esc(sig.t) : ""} ▶</button>
         <span class="pres-der">
-          <button class="btn chico" data-modo-ed aria-pressed="${UI.modoEdicion}" type="button">${UI.modoEdicion ? "✎ Modificando" : "✎ Modificar"}</button>
+          ${esAdmin() ? `<button class="btn chico" data-modo-ed aria-pressed="${UI.modoEdicion}" type="button">${UI.modoEdicion ? "✎ Modificando" : "✎ Modificar"}</button>` : ""}
           <button class="btn chico" data-pres-full type="button">${document.fullscreenElement ? "Salir de pantalla completa" : "⛶ Pantalla completa"}</button>
           ${window.SIN_DESCARGAS ? "" : `<a class="btn chico" href="${esc(urlPestana)}" target="_blank" rel="noopener">↗ Abrir en otra pestaña</a>`}
           <button class="btn chico prim" data-pres-cerrar type="button" title="Cerrar (Esc)">✕ Cerrar</button>
@@ -1396,6 +1407,7 @@
       </div>
       <div class="pres-cuerpo">${cuerpo}</div></div>`;
     document.body.classList.add("en-pres");
+    bloquearLector(document.getElementById("app"));
     return true;
   }
   function render() {
@@ -1417,6 +1429,8 @@
     try {
       if (UI.tab === "junta") cuerpo = `<div class="wrap">${indice(BLOQUES)}<main class="lienzo">${BLOQ_FN.map((f) => f()).join("")}</main></div>`;
       else if (UI.tab === "analisis") cuerpo = `<div class="wrap">${indice(SECC2.map(([id, t], i) => [id, String.fromCharCode(65 + i), t, ""]))}<main class="lienzo"><div class="aviso info">Información de apoyo que no forma parte del orden de la junta. Usa el mismo periodo de la barra superior.</div>${SECC_FN.map((f) => f()).join("")}</main></div>`;
+      else if (UI.tab === "campanas") cuerpo = `<div class="wrap">${indice(CAMP_SECC.map(([id, n, t]) => [id, n, t, ""]))}<main class="lienzo">${CAMP_SECC.map((x) => x[3]()).join("")}</main></div>`;
+      else if (UI.tab === "usuarios") cuerpo = `<div class="wrap sin-indice"><main class="lienzo">${vistaUsuarios()}</main></div>`;
       else cuerpo = `<div class="wrap sin-indice"><main class="lienzo">${vistaDatos()}</main></div>`;
     } catch (e) {
       console.error(e);
@@ -1424,6 +1438,7 @@
     }
     document.getElementById("app").innerHTML = cabecera() + cuerpo;
     document.body.classList.toggle("editando", UI.modoEdicion);
+    bloquearLector(document.getElementById("app"));
     baseChart();
     PEND.forEach((f) => { try { f(); } catch (e) { console.error(e); } });
     window.scrollTo(0, scroll);
@@ -1451,7 +1466,7 @@
     CTX = null; PEND = [];
     const foco = document.activeElement && document.activeElement.id;
     const tmp = document.createElement("div"); tmp.innerHTML = fn();
-    el.replaceWith(tmp.firstElementChild);
+    const nuevo = tmp.firstElementChild; el.replaceWith(nuevo); bloquearLector(nuevo);
     PEND.forEach((f) => { try { f(); } catch (e) { console.error(e); } });
     if (foco) { const x = document.getElementById(foco); if (x) x.focus(); }
   }
@@ -1463,6 +1478,15 @@
   document.addEventListener("click", (ev) => {
     const t = ev.target.closest("button, a, label") || ev.target;
     const d = t.dataset || {};
+    if ("salir" in d) { salir(); return; }
+    if ("seguir" in d) { actividad(); return; }
+    if ("recargarBase" in d) { recargarBase(); return; }
+    if ("miPass" in d) { pantallaCambio(false); return; }
+    if ("cancelarCambio" in d) { arrancar(); return; }
+    if (!esAdmin() && esEdicion(d)) { toast("Tu acceso es de solo lectura."); return; }
+    if (d.tendencias !== undefined) { G.prefs.tendencias = G.prefs.tendencias === false; guardar(); render(); return; }
+    if (UI.tab === "usuarios" && eventosUsuarios(ev, "click")) return;
+    if ((UI.tab === "campanas" || UI.foco) && eventosCampana(ev, "click")) return;
     // Cerrar selector abierto al hacer clic fuera
     if (UI.abierto && !ev.target.closest(".ms")) { UI.abierto = null; render(); return; }
     if (d.tab) { UI.tab = d.tab; window.scrollTo(0, 0); render(); return; }
@@ -1505,6 +1529,9 @@
   });
   document.addEventListener("change", (ev) => {
     const t = ev.target, d = t.dataset;
+    if (!esAdmin() && esEdicion(d)) return;
+    if (UI.tab === "usuarios" && eventosUsuarios(ev, "change")) return;
+    if (UI.tab === "campanas" && eventosCampana(ev, "change")) return;
     if (t.id === "p-anio") { P.anio = +t.value; if (P.mes > Math.max(cerrado(P.anio), 1) && P.anio < hoy.getFullYear()) P.mes = Math.min(P.mes, 12); render(); return; }
     if (t.id === "p-mes") { P.mes = +t.value; render(); return; }
     if (t.id === "p-trim") { P.trim = +t.value; render(); return; }
@@ -1526,6 +1553,9 @@
   });
   document.addEventListener("input", (ev) => {
     const t = ev.target, d = t.dataset;
+    if (!esAdmin() && esEdicion(d)) return;
+    if (UI.tab === "usuarios" && eventosUsuarios(ev, "input")) return;
+    if (UI.tab === "campanas" && eventosCampana(ev, "input")) return;
     if (d.nota) { junta(ctx().clave).notas[d.nota] = t.value; guardar(); return; }
     if (d.juntaCampo) { junta(ctx().clave)[d.juntaCampo] = t.value; guardar(); return; }
     if (d.cf) { const x = G.compromisos.find((z) => z.id === t.closest("tr").dataset.comp); if (x) { x[d.cf] = d.cf === "avance" ? +t.value : t.value; if (d.cf === "avance") t.nextElementSibling.textContent = t.value + "%"; guardar(); } return; }
@@ -1553,7 +1583,7 @@
   function respaldoManual(txt) { const el = $("#resp-texto"); if (el) { el.value = txt; el.select(); toast("Selecciona y copia el texto del cuadro."); } else toast("No se pudo copiar."); }
 
   /* ----------------------------------------------------- respaldo */
-  const respaldo = () => ({ app: "isel-junta-mensual", version: 1, fecha: new Date().toISOString(), ed: G.ed, juntas: G.juntas, compromisos: G.compromisos, analisis: G.analisis || {}, cliCart: G.cliCart || {} });
+  const respaldo = () => ({ app: "isel-junta-mensual", version: 2, fecha: new Date().toISOString(), ed: G.ed, juntas: G.juntas, compromisos: G.compromisos, analisis: G.analisis || {}, cliCart: G.cliCart || {}, campanas: G.campanas || {}, oport: G.oport || {}, config: G.config || {} });
   function exportar() {
     const txt = JSON.stringify(respaldo(), null, 1);
     if (window.SIN_DESCARGAS) { const el = $("#resp-texto"); if (el) { el.value = txt; el.select(); } copiar(txt); toast("Respaldo copiado. Pégalo en un archivo de texto para guardarlo."); return; }
@@ -1575,6 +1605,9 @@
     G.juntas = Object.assign({}, G.juntas, R.juntas || {});
     G.analisis = Object.assign({}, G.analisis || {}, R.analisis || {});
     G.cliCart = Object.assign({}, G.cliCart || {}, R.cliCart || {});
+    G.campanas = Object.assign({}, G.campanas || {}, R.campanas || {});
+    G.oport = Object.assign({}, G.oport || {}, R.oport || {});
+    G.config = Object.assign({}, G.config || {}, R.config || {});
     for (const k of ["h", "k", "c", "s"]) G.ed[k] = Object.assign({}, G.ed[k], (R.ed || {})[k] || {});
     guardar(); indexar(); render(); toast("Respaldo cargado");
   }
@@ -1608,12 +1641,757 @@
           if (L.tipo === "tablero") { for (const k of Object.keys(G.ed.s)) if (k.startsWith(pref)) delete G.ed.s[k]; delete G.ed.c[L.clave]; }
         }
       }
-      BASE = nueva;
-      try { localStorage.setItem(LS_BASE, JSON.stringify(BASE)); G_BASE_LOCAL = true; } catch (e) { toast("Los datos se cargaron, pero el navegador no permitió guardarlos: se perderán al cerrar."); }
-      guardar(); indexar(); ajustarPeriodo(); render();
+      if (NUBE) { await guardarBase(nueva, msg); }
+      BASE = nueva; FAC = null; VCF = null;
+      if (!NUBE) try { localStorage.setItem(LS_BASE, JSON.stringify(BASE)); G_BASE_LOCAL = true; } catch (e) { toast("Los datos se cargaron, pero el navegador no permitió guardarlos: se perderán al cerrar."); }
+      guardar(); indexar(); ajustarPeriodo(); if (document.querySelector(".acceso")) arrancar(); else render();
       toast("Datos actualizados");
       const e2 = $("#estado-carga"); if (e2) e2.textContent = "Cargado: " + hechos.join(" · ");
     } catch (e) { console.error(e); msg("No se pudo leer: " + e.message); toast(e.message); }
+  }
+
+  /* ===================================================================== */
+  /*                                CAMPAÑAS                                 */
+  /* ===================================================================== */
+  const MOTIVOS_BASE = ["Precio", "Tiempo de entrega", "Prestaciones técnicas (no cumple la especificación)", "Mejor tecnología de la competencia", "Sin respuesta del cliente",
+    "Se compró con otro proveedor", "Proyecto cancelado o pospuesto", "Sin presupuesto del cliente", "Condiciones comerciales (crédito o forma de pago)",
+    "Producto no disponible o descontinuado", "Marca especificada u homologación del cliente", "Preferencia o relación con otro proveedor", "Cotización tardía o incompleta", "Otro"];
+  const motivos = () => (G.config && Array.isArray(G.config.motivos) && G.config.motivos.length ? G.config.motivos : MOTIVOS_BASE);
+  const METRICAS = [
+    ["ganado", "Monto ganado", "$", "cierre"], ["facturado", "Monto facturado", "$", "factura"], ["cotizado", "Monto cotizado", "$", "alta"],
+    ["oport", "Oportunidades generadas", "#", "alta"], ["ganadas", "Oportunidades ganadas", "#", "cierre"], ["clientes", "Clientes con oportunidad", "#", "alta"], ["clientes_g", "Clientes que compraron", "#", "cierre"],
+  ];
+  const MET = Object.fromEntries(METRICAS.map((m) => [m[0], { n: m[1], u: m[2], fecha: m[3] }]));
+  const ESTADO_OP = { abierta: ["Abierta", "na"], ganada: ["Ganada", "ok"], perdida: ["Perdida", "bad"] };
+  const ESTADO_C = { planeada: "Planeada", activa: "Activa", pausada: "Pausada", terminada: "Terminada" };
+  const valMet = (k, v) => (MET[k] && MET[k].u === "$" ? fmtM(v) : fin(v) ? Math.round(v).toLocaleString("es-MX") : "—");
+  const diasEntre = (a, b) => (new Date(b + "T12:00:00") - new Date(a + "T12:00:00")) / 864e5;
+  const hoyIso = () => isoLocal(new Date());
+  const campanasLista = () => Object.values(G.campanas || {}).sort((a, b) => (b.inicio || "").localeCompare(a.inicio || "") || (a.nombre || "").localeCompare(b.nombre || ""));
+  const opsDe = (cid) => Object.values(G.oport || {}).filter((o) => o.campana_id === cid);
+  const marcasPortafolio = () => [...new Set([...IDX.h.values()].filter((r) => r.d === "linea").map((r) => r.n))].filter((n) => !/anticipo|descontinu|servicio/i.test(n)).sort();
+
+  // Filtro de fechas: toda la campaña o el periodo de la barra superior
+  function filtroFechas() {
+    if (vista("camp-per", "campana") === "campana") return () => true;
+    const L = periodoMeses(); const set = new Set(L.map(([a, m]) => `${a}-${pad(m)}`));
+    return (f) => !f || set.has(String(f).slice(0, 7));
+  }
+  function calcular(ops, enP = () => true) {
+    const r = { oport: 0, cotizado: 0, abiertas: 0, abierto: 0, ganadas: 0, ganado: 0, perdidas: 0, perdido: 0, facturado: 0, clientes: 0, clientes_g: 0, ciclo: [], sinMotivo: 0 };
+    const cl = new Set(), clg = new Set();
+    for (const o of ops) {
+      const m = +o.monto || 0;
+      if (enP(o.fecha_alta)) { r.oport++; r.cotizado += m; cl.add(o.cliente); if (o.estado === "abierta") { r.abiertas++; r.abierto += m; } }
+      if (o.estado === "ganada" && enP(o.fecha_cierre || o.fecha_alta)) { r.ganadas++; r.ganado += m; clg.add(o.cliente); if (o.fecha_alta && o.fecha_cierre) r.ciclo.push(diasEntre(o.fecha_alta, o.fecha_cierre)); }
+      if (o.estado === "perdida" && enP(o.fecha_cierre || o.fecha_alta)) { r.perdidas++; r.perdido += m; if (!o.motivo) r.sinMotivo++; }
+      if (o.fecha_factura && enP(o.fecha_factura)) r.facturado += +o.monto_facturado || (o.estado === "ganada" ? m : 0);
+    }
+    r.clientes = cl.size; r.clientes_g = clg.size;
+    r.tasa = div(r.ganadas, r.ganadas + r.perdidas); r.tasa$ = div(r.ganado, r.ganado + r.perdido);
+    r.ticket = div(r.ganado, r.ganadas); r.cicloProm = r.ciclo.length ? r.ciclo.reduce((s, x) => s + x, 0) / r.ciclo.length : null;
+    return r;
+  }
+  function tiempoCampana(c) {
+    if (!c.inicio || !c.fin) return null;
+    const tot = Math.max(1, diasEntre(c.inicio, c.fin)); const t = diasEntre(c.inicio, hoyIso());
+    return Math.max(0, Math.min(1, t / tot));
+  }
+  function principal(c) { const m = c.metas || {}; const k = m.principal && fin(+m[m.principal]) && +m[m.principal] > 0 ? m.principal : METRICAS.map((x) => x[0]).find((x) => +m[x] > 0); return k || "ganado"; }
+  function avanceCampana(c, ops, enP) {
+    const R = calcular(ops, enP); const k = principal(c); const meta = +((c.metas || {})[k]) || null;
+    const av = div(R[k], meta); const t = tiempoCampana(c);
+    const ritmo = c.estado === "planeada" || t === 0 || t === null ? null : div(av, t);
+    return { R, k, meta, av, t, ritmo };
+  }
+  const semRitmo = (x) => (!fin(x) ? "na" : x >= 1 ? "ok" : x >= 0.8 ? "warn" : "bad");
+  const opcCarteras = () => Object.entries(IDX.cartNom).sort().map(([k, n]) => ({ v: k, t: `${k} ${n}` }));
+
+  function campSeccion(id, num, titulo, pregunta, cuerpo) {
+    return `<section class="bloque" id="b-${id}"><header><span class="bloque-num">${num}</span><h2>${titulo}</h2><span class="pregunta">${pregunta}</span><div class="acciones-h">${botonAmpliar(id)}</div></header><div class="bloque-cuerpo">${cuerpo}</div></section>`;
+  }
+  // Campañas y oportunidades que pasan los filtros del tablero
+  function campFiltradas() {
+    const L = campanasLista();
+    registrarMs("camp-tipo", [{ v: "outbound", t: "Outbound" }, { v: "inbound", t: "Inbound" }]);
+    registrarMs("camp-estado", Object.entries(ESTADO_C).map(([v, t]) => ({ v, t })));
+    const marcas = [...new Set(L.map((c) => c.marca || "(sin marca)"))].sort().map((m) => ({ v: m, t: m })); registrarMs("camp-marca", marcas);
+    registrarMs("camp-cart", opcCarteras());
+    const cs = L.filter((c) => pasa("camp-tipo", c.tipo) && pasa("camp-estado", c.estado) && pasa("camp-marca", c.marca || "(sin marca)"));
+    const opsF = (c) => opsDe(c.id).filter((o) => pasa("camp-cart", o.cartera || "S/C"));
+    return { cs, opsF, marcas };
+  }
+  function filtrosCamp(marcas) {
+    return `${seg("camp-per", [["campana", "Toda la campaña"], ["periodo", `Periodo: ${esc(ctx().etiqueta)}`]], vista("camp-per", "campana"))}
+      ${ms("camp-tipo", [{ v: "outbound", t: "Outbound" }, { v: "inbound", t: "Inbound" }], "Tipo")} ${ms("camp-estado", Object.entries(ESTADO_C).map(([v, t]) => ({ v, t })), "Estado")} ${ms("camp-marca", marcas, "Marca")} ${ms("camp-cart", opcCarteras(), "Cartera", true)}`;
+  }
+
+  /* ---------------------------------------------------- C1 Resumen */
+  function cResumen() {
+    const { cs, opsF, marcas } = campFiltradas(); const enP = filtroFechas(); const C = colores();
+    if (!campanasLista().length) return campSeccion("c-resumen", "C1", "Campañas", "Avance de las campañas e iniciativas de venta",
+      `<div class="vacio">Todavía no hay campañas. ${esAdmin() ? `<button class="btn prim" type="button" data-camp-nueva>+ Nueva campaña</button>` : "El administrador las dará de alta."}</div>`);
+    const filas = cs.map((c) => ({ c, ...avanceCampana(c, opsF(c), enP) }));
+    const T = calcular(cs.flatMap(opsF), enP);
+    const activas = cs.filter((c) => c.estado === "activa").length;
+    const vis = filas.filter((f) => f.meta);
+    chart("g-camp-av", { type: "bar", data: { labels: vis.map((f) => f.c.nombre.length > 28 ? f.c.nombre.slice(0, 27) + "…" : f.c.nombre), datasets: [{ label: "Avance del objetivo", data: vis.map((f) => f.av), backgroundColor: vis.map((f) => C[semRitmo(f.ritmo)] || C.s1) }, { label: "Tiempo transcurrido", data: vis.map((f) => f.t), backgroundColor: C.meta }] },
+      options: { indexAxis: "y", plugins: { tooltip: { callbacks: { label: (x) => `${x.dataset.label}: ${fmtP(x.parsed.x)}`, afterBody: (it) => { const f = vis[it[0].dataIndex]; return `${MET[f.k].n}: ${valMet(f.k, f.R[f.k])} de ${valMet(f.k, f.meta)}`; } } } }, scales: { x: ejeP({ beginAtZero: true, suggestedMax: 1 }), y: { grid: { display: false } } } } });
+    const tabla = `<div class="tabla-wrap"><table class="t"><thead><tr><th>Campaña</th><th>Tipo</th><th>Estado</th><th>Marca</th><th>Fechas</th><th class="n">Objetivo</th><th class="n">Avance</th><th class="n">Tiempo</th><th class="n">Abiertas</th><th class="n">Ganadas</th><th class="n">Perdidas</th><th class="n">Tasa de cierre</th><th class="n">Ganado</th></tr></thead><tbody>
+      ${filas.map((f) => `<tr class="fila-click" data-camp-ver="${f.c.id}" tabindex="0"><td class="nombre"><b>${esc(f.c.nombre)}</b><div class="cod" style="margin:0">${f.c.carteras.length} carteras</div></td><td><span class="sem na">${f.c.tipo === "inbound" ? "Inbound" : "Outbound"}</span></td><td>${ESTADO_C[f.c.estado] || f.c.estado}</td><td>${esc(f.c.marca || "—")}</td><td class="mono" style="white-space:nowrap">${esc(f.c.inicio || "—")} → ${esc(f.c.fin || "—")}</td>
+        <td class="n">${f.meta ? `${valMet(f.k, f.meta)}<div class="cod" style="margin:0">${MET[f.k].n}</div>` : "—"}</td><td class="n">${f.meta ? sem(f.ritmo === null ? f.av : f.ritmo >= 1 ? 1 : f.ritmo >= 0.8 ? 0.85 : 0.5, fmtP(f.av)) : "—"}</td><td class="n">${fmtP(f.t)}</td>
+        <td class="n">${f.R.abiertas}</td><td class="n pos">${f.R.ganadas}</td><td class="n neg">${f.R.perdidas}</td><td class="n">${fmtP(f.R.tasa)}</td><td class="n">${fmt$(f.R.ganado)}</td></tr>`).join("") || `<tr><td colspan="13">Ninguna campaña con estos filtros.</td></tr>`}</tbody></table></div>`;
+    return campSeccion("c-resumen", "C1", "Campañas", "¿Cómo avanzan las campañas contra su objetivo?",
+      `<div class="sub" style="margin:0;flex-wrap:wrap;gap:8px">${filtrosCamp(marcas)} <span class="der">${esAdmin() ? `<button class="btn prim chico" type="button" data-camp-nueva>+ Nueva campaña</button>` : ""}</span></div>
+      <div class="tira"><div class="celda"><label>Campañas activas</label><div class="valor">${activas}</div><small>${cs.length} con estos filtros</small></div>
+        <div class="celda"><label>Oportunidades</label><div class="valor">${T.oport}</div><small>${fmtM(T.cotizado)} cotizados · ${T.abiertas} abiertas</small></div>
+        <div class="celda"><label>Ganado</label><div class="valor pos">${fmtM(T.ganado)}</div><small>${T.ganadas} oportunidades · ticket ${fmtM(T.ticket)}</small></div>
+        <div class="celda"><label>Tasa de cierre</label><div class="valor">${fmtP(T.tasa)}</div><small>${T.perdidas} perdidas por ${fmtM(T.perdido)}</small></div></div>
+      ${vis.length ? `<div><div class="sub">Avance del objetivo contra tiempo transcurrido</div><div class="graf" style="height:${Math.min(520, Math.max(200, vis.length * 44 + 60))}px"><canvas id="g-camp-av" role="img" aria-label="Avance de cada campaña"></canvas></div><p class="nota-pie">Si el avance (color) va por detrás del tiempo transcurrido (gris), la campaña no llegará a su objetivo al ritmo actual. Verde: a tiempo · ámbar: 80–99% del ritmo · rojo: menos de 80%.</p></div>` : ""}
+      ${tabla}<p class="nota-pie">Haz clic en una campaña para ver su detalle.</p>`);
+  }
+
+  /* ---------------------------------------------------- C2 Detalle */
+  function cDetalle() {
+    const L = campanasLista();
+    if (UI.campEdit) return campSeccion("c-detalle", "C2", UI.campEdit === "nueva" ? "Nueva campaña" : "Editar campaña", "Datos de la campaña", editorCampana());
+    if (!L.length) return "";
+    const c = G.campanas[UI.campSel] || L[0]; UI.campSel = c.id;
+    const enP = filtroFechas(); const C = colores();
+    registrarMs("cd-cart", c.carteras.map((k) => ({ v: k, t: nombreCartera(k) })).concat([{ v: "S/C", t: "Sin cartera" }]));
+    const todas = opsDe(c.id); const ops = todas.filter((o) => pasa("cd-cart", o.cartera || "S/C"));
+    const A = avanceCampana(c, ops, enP); const R = A.R; const metas = c.metas || {};
+    // Avance acumulado en el tiempo
+    const k = A.k, fk = MET[k].fecha;
+    const fechaDe = (o) => (fk === "alta" ? o.fecha_alta : fk === "factura" ? o.fecha_factura : o.estado === "ganada" ? o.fecha_cierre || o.fecha_alta : null);
+    const valorDe = (o) => (k === "facturado" ? +o.monto_facturado || (o.estado === "ganada" ? +o.monto || 0 : 0) : k === "ganado" || k === "cotizado" ? +o.monto || 0 : 1);
+    let graf = "";
+    if (c.inicio && c.fin) {
+      const pasos = []; const ini = new Date(c.inicio + "T12:00:00"), finD = new Date(c.fin + "T12:00:00");
+      for (let d = new Date(ini); d <= finD; d.setDate(d.getDate() + 7)) pasos.push(isoLocal(d));
+      if (pasos[pasos.length - 1] !== c.fin) pasos.push(c.fin);
+      const hoyS = hoyIso(); const vistos = new Set();
+      const real = pasos.map((p) => {
+        if (p > hoyS && pasos[0] <= hoyS && pasos.findIndex((x) => x > hoyS) !== pasos.indexOf(p)) return null;
+        let acc = 0; vistos.clear();
+        for (const o of ops) { const f = fechaDe(o); if (!f || f > p) continue; if (k === "clientes" || k === "clientes_g") { if (!vistos.has(o.cliente)) { vistos.add(o.cliente); acc++; } } else if (!(k === "ganadas" && o.estado !== "ganada")) acc += valorDe(o); }
+        return p > hoyS ? null : acc;
+      });
+      const ideal = A.meta ? pasos.map((p) => A.meta * Math.max(0, Math.min(1, diasEntre(c.inicio, p) / Math.max(1, diasEntre(c.inicio, c.fin))))) : null;
+      chart("g-camp-t", { type: "line", data: { labels: pasos.map((p) => `${+p.slice(8)} ${MC[+p.slice(5, 7) - 1]}`), datasets: [
+        { label: `${MET[k].n} acumulado`, data: real, borderColor: C.s1, backgroundColor: alfa(C.s1, 0.12), fill: "origin", tend: MET[k].u === "$" ? "M" : "n", tendMin: 0, tendPaso: "sem", tendHasta: pasos.length - 1, tendNombre: "Proyección por tendencia" },
+        ...(ideal ? [{ label: "Ritmo necesario para la meta", data: ideal, borderColor: C.meta, borderDash: [4, 4], pointRadius: 0 }] : []) ] },
+        options: { scales: { y: MET[k].u === "$" ? ejeM({ beginAtZero: true }) : { beginAtZero: true, grid: { color: C.grid } }, x: { grid: { display: false }, ticks: { maxTicksLimit: 12, maxRotation: 0 } } }, plugins: { tooltip: { callbacks: { label: (x) => `${x.dataset.label}: ${valMet(k, x.parsed.y)}` } } } } });
+      graf = `<div><div class="sub">Avance de ${MET[k].n.toLowerCase()} en el tiempo</div><div class="graf"><canvas id="g-camp-t" role="img" aria-label="Avance acumulado de la campaña"></canvas></div><p class="nota-pie">La línea de tendencia se extiende hasta el cierre de la campaña: es la proyección si se mantiene el ritmo actual.</p></div>`;
+    }
+    // Por cartera
+    const porCart = c.carteras.concat(ops.some((o) => !o.cartera || !c.carteras.includes(o.cartera)) ? ["S/C"] : []).filter((x) => pasa("cd-cart", x));
+    const RC = porCart.map((kc) => ({ k: kc, R: calcular(ops.filter((o) => (o.cartera && c.carteras.includes(o.cartera) ? o.cartera : "S/C") === kc), enP) }));
+    const modoC = vista("cd-modo", "monto");
+    const v$ = (R, campo) => (modoC === "monto" ? R[{ abiertas: "abierto", ganadas: "ganado", perdidas: "perdido" }[campo]] : R[campo]);
+    chart("g-camp-cart", { type: "bar", data: { labels: RC.map((x) => x.k === "S/C" ? "Sin cartera" : x.k), datasets: [["ganadas", "Ganadas", C.ok], ["abiertas", "Abiertas", C.s1], ["perdidas", "Perdidas", C.bad]].map(([cmp, lab, col]) => ({ label: lab, data: RC.map((x) => v$(x.R, cmp)), backgroundColor: col })) },
+      options: { scales: { x: { stacked: true, grid: { display: false } }, y: modoC === "monto" ? ejeM({ stacked: true, beginAtZero: true }) : { stacked: true, beginAtZero: true, grid: { color: C.grid } } }, plugins: { tooltip: { callbacks: { title: (it) => nombreCartera(RC[it[0].dataIndex].k), label: (x) => `${x.dataset.label}: ${modoC === "monto" ? fmt$(x.parsed.y) : x.parsed.y}` } } } } });
+    const metaCart = A.meta && c.carteras.length ? A.meta / c.carteras.length : null;
+    const tablaCart = `<div class="tabla-wrap" style="max-height:none"><table class="t"><thead><tr><th>Cartera</th><th class="n">Oportunidades</th><th class="n">Cotizado</th><th class="n">Ganadas</th><th class="n">Ganado</th><th class="n">Perdidas</th><th class="n">Tasa</th>${metaCart ? `<th class="n">Avance (${MET[k].n.toLowerCase()})</th>` : ""}</tr></thead><tbody>
+      ${RC.map((x) => `<tr><td class="nombre">${esc(nombreCartera(x.k))}</td><td class="n">${x.R.oport}</td><td class="n">${fmt$(x.R.cotizado)}</td><td class="n pos">${x.R.ganadas}</td><td class="n">${fmt$(x.R.ganado)}</td><td class="n neg">${x.R.perdidas}</td><td class="n">${fmtP(x.R.tasa)}</td>${metaCart ? `<td class="n">${x.k === "S/C" ? "—" : sem(div(x.R[k], metaCart), `${valMet(k, x.R[k])} · ${fmtP(div(x.R[k], metaCart))}`)}</td>` : ""}</tr>`).join("")}</tbody></table></div>
+      ${metaCart ? `<p class="nota-pie">Meta por cartera: ${valMet(k, metaCart)} (objetivo repartido en partes iguales entre ${c.carteras.length} carteras).</p>` : ""}`;
+    // Productos
+    const prods = {}; for (const o of ops) { const p = [o.marca, o.modelo].filter(Boolean).join(" · ") || "(sin modelo)"; const x = (prods[p] = prods[p] || { n: 0, cot: 0, gan: 0, per: 0 }); x.n++; x.cot += +o.monto || 0; if (o.estado === "ganada") x.gan += +o.monto || 0; if (o.estado === "perdida") x.per += +o.monto || 0; }
+    const PR = Object.entries(prods).sort((a, b) => b[1].cot - a[1].cot).slice(0, 12);
+    // Tiles de metas
+    const tiles = METRICAS.filter(([m]) => +metas[m] > 0).map(([m, n]) => { const v = R[m], meta = +metas[m]; const av = div(v, meta); return `<div class="celda ${m === k ? "principal" : ""}"><label>${n}${m === k ? " · principal" : ""}</label><div class="valor">${valMet(m, v)}</div><small>meta ${valMet(m, meta)} · ${fmtP(av)}</small><div class="barra-avance" style="color:var(--${semClase(av) === "na" ? "muted" : semClase(av)})"><i style="width:${Math.min(100, (av || 0) * 100)}%"></i></div></div>`; }).join("");
+    const proy = A.t && A.t > 0 && A.t < 1 && A.meta ? R[k] / A.t : null;
+    const encabezado = `<div class="camp-cab"><div><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><select class="campo" id="camp-sel" style="width:auto;font-weight:600" aria-label="Campaña">${L.map((x) => `<option value="${x.id}" ${x.id === c.id ? "selected" : ""}>${esc(x.nombre)}</option>`).join("")}</select>
+        <span class="sem na">${c.tipo === "inbound" ? "Inbound" : "Outbound"}</span><span class="sem ${c.estado === "activa" ? "ok" : c.estado === "terminada" ? "na" : "warn"}">${ESTADO_C[c.estado]}</span>
+        ${esAdmin() ? `<button class="btn chico" type="button" data-camp-editar="${c.id}">Editar campaña</button><button class="btn chico peligro" type="button" data-camp-borrar="${c.id}">${UI.borrar === "c" + c.id ? "Confirmar: eliminar campaña y sus oportunidades" : "Eliminar"}</button>` : ""}</div>
+        <p style="margin:8px 0 0;max-width:90ch">${c.objetivo ? esc(c.objetivo) : '<span class="nota-pie">Sin descripción del objetivo.</span>'}</p>
+        <p class="nota-pie" style="margin:4px 0 0"><b>Marca:</b> ${esc(c.marca || "—")} · <b>Modelos:</b> ${esc(c.modelos || "—")} · <b>Fechas:</b> ${esc(c.inicio || "—")} a ${esc(c.fin || "—")} (${fmtP(A.t)} del tiempo transcurrido) · <b>Participan:</b> ${c.carteras.map((x) => esc(nombreCartera(x))).join(", ") || "—"}</p></div></div>`;
+    const ritmoTxt = A.meta ? `<div class="interpretacion"><p>${A.t === null ? "Define fechas de inicio y fin para medir el ritmo." : c.estado === "planeada" ? "La campaña todavía no inicia." : `Lleva <b>${fmtP(A.av)}</b> del objetivo (${valMet(k, R[k])} de ${valMet(k, A.meta)}) con <b>${fmtP(A.t)}</b> del tiempo transcurrido. ${proy !== null ? `Al ritmo actual cerraría en <b>${valMet(k, proy)}</b> (${fmtP(div(proy, A.meta))} de la meta)${proy < A.meta ? `; para llegar necesita ${valMet(k, (A.meta - R[k]))} en el tiempo que resta.` : "."}` : A.t >= 1 ? `La campaña terminó en ${fmtP(A.av)} de su objetivo.` : ""}`} ${R.perdidas ? `Se han perdido <b>${R.perdidas}</b> oportunidades por ${fmtM(R.perdido)}${R.sinMotivo ? `; <b>${R.sinMotivo}</b> no tienen motivo registrado` : ""}.` : ""}</p></div>` : "";
+    return campSeccion("c-detalle", "C2", "Detalle de campaña", esc(c.nombre),
+      `${encabezado}
+      <div class="sub" style="margin:0;gap:8px;flex-wrap:wrap">${seg("camp-per", [["campana", "Toda la campaña"], ["periodo", `Periodo: ${esc(ctx().etiqueta)}`]], vista("camp-per", "campana"))} ${ms("cd-cart", c.carteras.map((x) => ({ v: x, t: nombreCartera(x) })).concat([{ v: "S/C", t: "Sin cartera" }]), "Cartera")}</div>
+      ${tiles ? `<div class="tira tira-auto">${tiles}</div>` : `<div class="aviso">La campaña no tiene metas. ${esAdmin() ? "Edítala para definir su objetivo." : ""}</div>`}
+      ${ritmoTxt}
+      <div class="tira tira-auto"><div class="celda"><label>Abiertas</label><div class="valor">${R.abiertas}</div><small>${fmtM(R.abierto)} en juego</small></div><div class="celda"><label>Ganadas</label><div class="valor pos">${R.ganadas}</div><small>${fmtM(R.ganado)}</small></div><div class="celda"><label>Perdidas</label><div class="valor neg">${R.perdidas}</div><small>${fmtM(R.perdido)}</small></div><div class="celda"><label>Tasa de cierre</label><div class="valor">${fmtP(R.tasa)}</div><small>${fmtP(R.tasa$)} en monto</small></div><div class="celda"><label>Ciclo promedio</label><div class="valor">${fin(R.cicloProm) ? Math.round(R.cicloProm) + " días" : "—"}</div><small>de alta a cierre ganado</small></div></div>
+      <div class="grid2">${graf || "<div></div>"}<div><div class="sub">Resultado por cartera <span class="der">${seg("cd-modo", [["monto", "Monto"], ["num", "Número"]], modoC)}</span></div><div class="graf"><canvas id="g-camp-cart" role="img" aria-label="Oportunidades por cartera"></canvas></div></div></div>
+      ${tablaCart}
+      ${PR.length ? `<div><div class="sub">Modelos y productos</div><div class="tabla-wrap" style="max-height:none"><table class="t"><thead><tr><th>Marca · modelo</th><th class="n">Oportunidades</th><th class="n">Cotizado</th><th class="n">Ganado</th><th class="n">Perdido</th></tr></thead><tbody>${PR.map(([p, x]) => `<tr><td>${esc(p)}</td><td class="n">${x.n}</td><td class="n">${fmt$(x.cot)}</td><td class="n pos">${fmt$(x.gan)}</td><td class="n neg">${fmt$(x.per)}</td></tr>`).join("")}</tbody></table></div></div>` : ""}
+      ${tablaOport(c, todas)}`);
+  }
+
+  function tablaOport(c, todas) {
+    const adm = esAdmin();
+    registrarMs("op-estado", Object.entries(ESTADO_OP).map(([v, [t]]) => ({ v, t })));
+    const mot = [...new Set([...motivos(), ...todas.map((o) => o.motivo).filter(Boolean)])];
+    registrarMs("op-motivo", [{ v: "", t: "(sin motivo)" }, ...mot.map((m) => ({ v: m, t: m }))]);
+    const q = (UI.busq["op-q"] || "").toLowerCase();
+    let L = todas.filter((o) => pasa("cd-cart", o.cartera || "S/C") && pasa("op-estado", o.estado) && (o.estado !== "perdida" || pasa("op-motivo", o.motivo || "")) && (!q || `${o.cliente} ${o.oportunidad} ${o.modelo}`.toLowerCase().includes(q)));
+    L = ordenar("op-tabla", L.map((o) => ({ ...o, monto: +o.monto || 0 })), "fecha_alta:d");
+    const opcCart = c.carteras.map((k) => `<option value="${k}">${esc(nombreCartera(k))}</option>`).join("");
+    const celda = (o, campo, tipo = "text", extra = "") => adm ? `<input data-op="${o.id}" data-campo="${campo}" type="${tipo}" value="${esc(o[campo] ?? "")}" ${extra} aria-label="${campo}">` : esc(o[campo] ?? "—");
+    const filas = L.map((o) => `<tr class="${o.estado === "perdida" && !o.motivo ? "falta-motivo" : ""}">
+      <td>${adm ? `<select data-op="${o.id}" data-campo="cartera" class="estado-sel" aria-label="Cartera"><option value="">—</option>${opcCart.replace(`value="${o.cartera}"`, `value="${o.cartera}" selected`)}</select>` : esc(o.cartera || "—")}</td>
+      <td style="min-width:160px">${celda(o, "cliente")}</td><td>${celda(o, "oportunidad")}</td><td>${celda(o, "modelo")}</td>
+      <td class="n" style="min-width:110px">${adm ? `<input data-op="${o.id}" data-campo="monto" inputmode="decimal" value="${esc(o.monto)}" style="text-align:right" aria-label="Monto">` : fmt$(+o.monto)}</td>
+      <td>${adm ? `<select data-op="${o.id}" data-campo="estado" class="estado-sel ${o.estado === "ganada" ? "cumplido" : o.estado === "perdida" ? "no_cumplido" : ""}" aria-label="Estado">${Object.entries(ESTADO_OP).map(([v, [t]]) => `<option value="${v}" ${o.estado === v ? "selected" : ""}>${t}</option>`).join("")}</select>` : `<span class="sem ${ESTADO_OP[o.estado][1]}">${ESTADO_OP[o.estado][0]}</span>`}</td>
+      <td style="min-width:170px">${o.estado !== "perdida" ? "" : adm ? `<select data-op="${o.id}" data-campo="motivo" class="estado-sel" aria-label="Motivo de pérdida"><option value="">Elegir motivo…</option>${mot.map((m) => `<option ${o.motivo === m ? "selected" : ""}>${esc(m)}</option>`).join("")}</select>` : esc(o.motivo || "Sin motivo")}${o.estado === "perdida" ? `<div style="margin-top:4px">${celda(o, "competidor", "text", 'placeholder="Competidor"')}</div>` : ""}</td>
+      <td>${celda(o, "fecha_alta", "date")}</td><td>${celda(o, "fecha_cierre", "date")}</td><td>${celda(o, "fecha_factura", "date")}</td>
+      <td class="n" style="min-width:100px">${adm ? `<input data-op="${o.id}" data-campo="monto_facturado" inputmode="decimal" value="${esc(o.monto_facturado ?? "")}" style="text-align:right" aria-label="Monto facturado">` : fmt$(+o.monto_facturado)}</td>
+      <td style="min-width:160px">${celda(o, "detalle", "text", 'placeholder="Comentarios"')}</td>
+      ${adm ? `<td><button class="restaurar" type="button" data-op-borrar="${o.id}" title="Eliminar">${UI.borrar === "o" + o.id ? "¿Eliminar?" : "✕"}</button></td>` : ""}</tr>`).join("");
+    return `<div><div class="sub">Oportunidades de la campaña (${L.length} de ${todas.length})
+        <span class="der" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><input type="search" class="campo" style="width:190px;padding:4px 8px" placeholder="Buscar cliente o modelo" data-busq="op-q" id="busq-op" value="${esc(UI.busq["op-q"] || "")}">${ms("op-estado", Object.entries(ESTADO_OP).map(([v, [t]]) => ({ v, t })), "Estado")} ${ms("op-motivo", [{ v: "", t: "(sin motivo)" }, ...mot.map((m) => ({ v: m, t: m }))], "Motivo", true)}
+        ${adm ? `<button class="btn chico prim" type="button" data-op-nueva="${c.id}">+ Oportunidad</button><button class="btn chico" type="button" data-op-pegar>Pegar desde Excel</button>` : ""}</span></div>
+      ${adm && UI.pegar ? `<div class="caja"><p style="margin:0 0 6px">Copia filas de Excel con estas columnas, en este orden: <b>Cartera · Cliente · Oportunidad · Modelo · Monto · Estado · Motivo · Fecha alta · Fecha cierre · Fecha factura · Monto facturado</b>. La cartera puede ser el número (C10) o el nombre; el estado, Abierta / Ganada / Perdida; las fechas en dd/mm/aaaa.</p><textarea class="respaldo" id="op-pegado" placeholder="Pega aquí"></textarea><div style="display:flex;gap:8px;margin-top:6px"><button class="btn chico prim" type="button" data-op-importar="${c.id}">Agregar oportunidades</button><button class="btn chico" type="button" data-op-pegar>Cancelar</button></div></div>` : ""}
+      <div class="tabla-wrap"><table class="t compromisos tabla-op"><thead><tr>${th("op-tabla", "cartera", "Cartera", false)}${th("op-tabla", "cliente", "Cliente", false)}<th>Oportunidad</th><th>Modelo</th>${th("op-tabla", "monto", "Monto")}${th("op-tabla", "estado", "Estado", false)}<th>Motivo de pérdida</th>${th("op-tabla", "fecha_alta", "Alta", false)}${th("op-tabla", "fecha_cierre", "Cierre", false)}<th>Facturada</th><th class="n">Facturado</th><th>Comentarios</th>${adm ? "<th></th>" : ""}</tr></thead>
+      <tbody>${filas || `<tr><td colspan="13">Sin oportunidades${adm ? ". Usa + Oportunidad o Pegar desde Excel." : "."}</td></tr>`}</tbody></table></div>
+      ${todas.some((o) => o.estado === "perdida" && !o.motivo) ? `<p class="nota-pie neg">Las filas marcadas son oportunidades perdidas sin motivo: regístralo para que el análisis de pérdidas sea útil.</p>` : ""}</div>`;
+  }
+
+  function editorCampana() {
+    const nueva = UI.campEdit === "nueva";
+    const c = UI.campBorrador || (UI.campBorrador = nueva ? { id: crypto.randomUUID ? crypto.randomUUID() : uid(), nombre: "", tipo: "outbound", estado: "activa", inicio: hoyIso(), fin: "", marca: "", modelos: "", carteras: [], objetivo: "", metas: { principal: "ganado" }, notas: "" } : JSON.parse(JSON.stringify(G.campanas[UI.campEdit])));
+    const m = c.metas || (c.metas = {});
+    const cart = Object.entries(IDX.cartNom).sort().filter(([k, n]) => n && n !== "(sin asignar)" && !/vacante/i.test(n));
+    return `<form id="f-campana" class="form-camp">
+      <div class="grid2"><div><label class="campo-label" for="cf-nombre">Nombre de la campaña</label><input class="campo" id="cf-nombre" data-cb="nombre" value="${esc(c.nombre)}" required placeholder="Ej. Sensores de seguridad SICK en automotriz"></div>
+        <div class="grid3" style="gap:10px"><div><label class="campo-label" for="cf-tipo">Tipo</label><select class="campo" id="cf-tipo" data-cb="tipo"><option value="outbound" ${c.tipo === "outbound" ? "selected" : ""}>Outbound</option><option value="inbound" ${c.tipo === "inbound" ? "selected" : ""}>Inbound</option></select></div>
+          <div><label class="campo-label" for="cf-estado">Estado</label><select class="campo" id="cf-estado" data-cb="estado">${Object.entries(ESTADO_C).map(([v, t]) => `<option value="${v}" ${c.estado === v ? "selected" : ""}>${t}</option>`).join("")}</select></div>
+          <div><label class="campo-label" for="cf-marca">Marca</label><input class="campo" id="cf-marca" data-cb="marca" list="lista-marcas" value="${esc(c.marca)}"><datalist id="lista-marcas">${marcasPortafolio().map((x) => `<option value="${esc(x)}">`).join("")}</datalist></div></div></div>
+      <div class="grid2"><div class="grid2" style="gap:10px"><div><label class="campo-label" for="cf-inicio">Inicio</label><input class="campo" type="date" id="cf-inicio" data-cb="inicio" value="${esc(c.inicio)}"></div><div><label class="campo-label" for="cf-fin">Fin</label><input class="campo" type="date" id="cf-fin" data-cb="fin" value="${esc(c.fin)}"></div></div>
+        <div><label class="campo-label" for="cf-modelos">Modelos o productos que promueve</label><input class="campo" id="cf-modelos" data-cb="modelos" value="${esc(c.modelos)}" placeholder="Ej. deTec4, nanoScan3, S3000"></div></div>
+      <div><label class="campo-label" for="cf-objetivo">Objetivo de la campaña</label><textarea class="campo" id="cf-objetivo" data-cb="objetivo" rows="2" placeholder="Qué se busca lograr y con qué clientes">${esc(c.objetivo)}</textarea></div>
+      <div><span class="campo-label">Carteras que participan (${c.carteras.length}) <button class="btn chico" type="button" data-cb-todas>${c.carteras.length === cart.length ? "Quitar todas" : "Todas"}</button></span>
+        <div class="checks">${cart.map(([k, n]) => `<label><input type="checkbox" data-cb-cart value="${k}" ${c.carteras.includes(k) ? "checked" : ""}> <span class="cod" style="margin:0">${k}</span> ${esc(n)}</label>`).join("")}</div></div>
+      <div><span class="campo-label">Metas (llena las que apliquen y marca la principal)</span>
+        <div class="metas">${METRICAS.map(([k2, n, u]) => `<label class="meta-item"><input type="radio" name="cf-principal" value="${k2}" ${principal(c) === k2 ? "checked" : ""} data-cb-principal aria-label="Meta principal"> <span>${n}${u === "$" ? " ($)" : ""}</span><input class="campo" inputmode="decimal" data-cb-meta="${k2}" value="${esc(m[k2] ?? "")}" placeholder="—"></label>`).join("")}</div></div>
+      <div><label class="campo-label" for="cf-notas">Notas</label><textarea class="campo" id="cf-notas" data-cb="notas" rows="2">${esc(c.notas)}</textarea></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn" type="button" data-camp-cancelar>Cancelar</button><button class="btn prim" type="submit">${nueva ? "Crear campaña" : "Guardar cambios"}</button></div>
+    </form>`;
+  }
+
+  /* ---------------------------------------------------- C3 Pérdidas */
+  function cPerdidas() {
+    const { cs, opsF } = campFiltradas(); const enP = filtroFechas(); const C = colores();
+    const perd = cs.flatMap((c) => opsF(c).map((o) => ({ ...o, campana: c.nombre }))).filter((o) => o.estado === "perdida" && enP(o.fecha_cierre || o.fecha_alta));
+    const cerradas = cs.flatMap(opsF).filter((o) => o.estado !== "abierta" && enP(o.fecha_cierre || o.fecha_alta)).length;
+    const modo = vista("perd-modo", "num");
+    const pm = {}; for (const o of perd) { const k = o.motivo || "(sin motivo)"; const x = (pm[k] = pm[k] || { n: 0, m: 0 }); x.n++; x.m += +o.monto || 0; }
+    const M = Object.entries(pm).sort((a, b) => (modo === "num" ? b[1].n - a[1].n : b[1].m - a[1].m));
+    chart("g-perd", { type: "bar", data: { labels: M.map(([k]) => (k.length > 34 ? k.slice(0, 33) + "…" : k)), datasets: [{ maxBarThickness: 26, label: modo === "num" ? "Oportunidades perdidas" : "Monto perdido", data: M.map(([, x]) => (modo === "num" ? x.n : x.m)), backgroundColor: M.map(([k]) => (k === "(sin motivo)" ? C.meta : C.bad)) }] },
+      options: { indexAxis: "y", plugins: { legend: { display: false }, tooltip: { callbacks: { title: (it) => M[it[0].dataIndex][0], label: (x) => { const v = M[x.dataIndex][1]; return `${v.n} oportunidades · ${fmt$(v.m)} · ${fmtP(div(v.n, perd.length))} de las pérdidas`; } } } }, scales: { x: modo === "num" ? { beginAtZero: true, grid: { color: C.grid }, ticks: { precision: 0 } } : ejeM({ beginAtZero: true }), y: { grid: { display: false }, ticks: { autoSkip: false } } } } });
+    const carts = [...new Set(perd.map((o) => o.cartera || "S/C"))].sort();
+    const mat = `<div class="tabla-wrap"><table class="t calor"><thead><tr><th>Motivo</th>${carts.map((k) => `<th class="n">${esc(k)}</th>`).join("")}<th class="n">Total</th></tr></thead><tbody>${M.map(([mo, x]) => `<tr><td>${esc(mo)}</td>${carts.map((k) => { const n = perd.filter((o) => (o.motivo || "(sin motivo)") === mo && (o.cartera || "S/C") === k).length; return `<td class="c" style="${n ? `background:${alfa(C.bad, Math.min(0.7, 0.12 + n / Math.max(...M.map((z) => z[1].n)) * 0.55))}` : ""}">${n || "·"}</td>`; }).join("")}<td class="c" style="font-weight:600">${x.n}</td></tr>`).join("")}</tbody></table></div>`;
+    const comp = {}; for (const o of perd) if (o.competidor) { const k = o.competidor.trim().toUpperCase(); const x = (comp[k] = comp[k] || { n: 0, m: 0 }); x.n++; x.m += +o.monto || 0; }
+    const CP = Object.entries(comp).sort((a, b) => b[1].m - a[1].m).slice(0, 10);
+    const top = M[0] && M[0][0] !== "(sin motivo)" ? M[0] : M[1];
+    const catalogo = esAdmin() ? `<details><summary class="campo-label" style="cursor:pointer">Catálogo de motivos de pérdida (${motivos().length})</summary><div class="motivos-ed">${motivos().map((mo, i) => `<div style="display:flex;gap:6px"><input class="campo" data-motivo="${i}" value="${esc(mo)}" aria-label="Motivo ${i + 1}"><button class="restaurar" type="button" data-motivo-borrar="${i}" title="Quitar">✕</button></div>`).join("")}<button class="btn chico" type="button" data-motivo-nuevo>+ Motivo</button></div><p class="nota-pie">Cambiar el nombre de un motivo no modifica las oportunidades ya registradas con el nombre anterior.</p></details>` : "";
+    return campSeccion("c-perdidas", "C3", "Análisis de pérdidas", "¿Por qué perdemos oportunidades?",
+      perd.length ? `<div class="tira"><div class="celda"><label>Oportunidades perdidas</label><div class="valor neg">${perd.length}</div><small>${fmtP(div(perd.length, cerradas))} de las cerradas</small></div>
+        <div class="celda"><label>Monto perdido</label><div class="valor neg">${fmtM(perd.reduce((s, o) => s + (+o.monto || 0), 0))}</div><small>con los filtros del resumen</small></div>
+        <div class="celda"><label>Motivo principal</label><div class="valor" style="font-size:20px;line-height:1.2">${top ? esc(top[0]) : "—"}</div><small>${top ? `${top[1].n} oportunidades · ${fmtM(top[1].m)}` : ""}</small></div>
+        <div class="celda"><label>Sin motivo registrado</label><div class="valor ${pm["(sin motivo)"] ? "neg" : ""}">${pm["(sin motivo)"] ? pm["(sin motivo)"].n : 0}</div><small>pérdidas por documentar</small></div></div>
+      <div class="grid-6-4"><div><div class="sub">Motivos de pérdida <span class="der">${seg("perd-modo", [["num", "Número"], ["monto", "Monto"]], modo)}</span></div><div class="graf" style="height:${Math.max(220, M.length * 30 + 50)}px"><canvas id="g-perd" role="img" aria-label="Motivos de pérdida"></canvas></div></div>
+        <div><div class="sub">Competidores a los que perdimos</div>${CP.length ? `<div class="tabla-wrap" style="max-height:none"><table class="t"><tbody>${CP.map(([k, x]) => `<tr><td>${esc(k)}</td><td class="n">${x.n}</td><td class="n neg">${fmt$(x.m)}</td></tr>`).join("")}</tbody></table></div>` : `<div class="vacio">Registra el competidor en las oportunidades perdidas para verlo aquí.</div>`}</div></div>
+      <div><div class="sub">Motivo por cartera</div>${mat}</div>${catalogo}`
+      : `<div class="vacio">No hay oportunidades perdidas con estos filtros.</div>${catalogo}`);
+  }
+
+  const CAMP_SECC = [["c-resumen", "C1", "Resumen", cResumen], ["c-detalle", "C2", "Detalle", cDetalle], ["c-perdidas", "C3", "Pérdidas", cPerdidas]];
+
+  /* --------------------------------------------- eventos de campañas */
+  function guardarCampana() {
+    const c = UI.campBorrador; if (!c) return;
+    if (!c.nombre.trim()) { toast("Escribe el nombre de la campaña."); $("#cf-nombre").focus(); return; }
+    if (c.inicio && c.fin && c.fin < c.inicio) { toast("La fecha de fin es anterior al inicio."); return; }
+    for (const k of Object.keys(c.metas)) if (k !== "principal" && (c.metas[k] === "" || !fin(+c.metas[k]))) delete c.metas[k]; else if (k !== "principal") c.metas[k] = +c.metas[k];
+    c.nombre = c.nombre.trim();
+    G.campanas[c.id] = c; UI.campSel = c.id; UI.campEdit = null; UI.campBorrador = null; guardar(); render(); toast("Campaña guardada");
+  }
+  function nuevaOport(cid) {
+    const c = G.campanas[cid]; const id = crypto.randomUUID ? crypto.randomUUID() : uid();
+    G.oport[id] = { id, campana_id: cid, cartera: c.carteras.length === 1 ? c.carteras[0] : "", cliente: "", oportunidad: "", marca: c.marca || "", modelo: "", monto: 0, estado: "abierta", motivo: "", detalle: "", competidor: "", fecha_alta: hoyIso(), fecha_cierre: "", fecha_factura: "", monto_facturado: null, notas: "" };
+    return id;
+  }
+  function fechaPegada(s) {
+    s = String(s || "").trim(); if (!s) return "";
+    let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+    m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/); if (m) { let a = +m[3]; if (a < 100) a += 2000; return `${a}-${pad(+m[2])}-${pad(+m[1])}`; }
+    return "";
+  }
+  function importarPegado(cid) {
+    const c = G.campanas[cid]; const txt = ($("#op-pegado") || {}).value || "";
+    const filas = txt.split(/\r?\n/).map((l) => l.split("\t")).filter((f) => f.join("").trim());
+    let n = 0, omit = 0;
+    const cat = Object.entries(IDX.cartNom);
+    for (const f of filas) {
+      const [cart, cli, opo, mod, monto, est, mot, fa, fc, ff, mf] = f.map((x) => (x || "").trim());
+      if (!cli || /^cliente$/i.test(cli)) { omit++; continue; }
+      let k = (cart.match(/^C?\s?(\d{1,2})\b/i) || [])[1]; k = k ? "C" + pad(+k) : (cat.find(([, nn]) => nn && ISELParser.norm(nn).includes(ISELParser.norm(cart))) || [])[0] || "";
+      const e = /gan|won/i.test(est) ? "ganada" : /perd|lost/i.test(est) ? "perdida" : "abierta";
+      const id = nuevaOport(cid);
+      Object.assign(G.oport[id], { cartera: k, cliente: cli.toUpperCase(), oportunidad: opo, modelo: mod, monto: +String(monto).replace(/[$,\s]/g, "") || 0, estado: e, motivo: e === "perdida" && mot ? (motivos().find((x) => ISELParser.norm(x).startsWith(ISELParser.norm(mot).slice(0, 6))) || mot) : "", fecha_alta: fechaPegada(fa) || hoyIso(), fecha_cierre: fechaPegada(fc), fecha_factura: fechaPegada(ff), monto_facturado: mf ? +String(mf).replace(/[$,\s]/g, "") || null : null, marca: c.marca || "" });
+      n++;
+    }
+    UI.pegar = false; guardar(); render(); toast(`Se agregaron ${n} oportunidades${omit ? ` (${omit} filas omitidas sin cliente)` : ""}.`);
+  }
+  function eventosCampana(ev, tipo) {
+    const t = ev.target, d = t.dataset || {};
+    if (tipo === "click") {
+      const b = t.closest("button, tr, label") || t; const bd = b.dataset || {};
+      if ("campNueva" in bd) { UI.campEdit = "nueva"; UI.campBorrador = null; UI.tab = "campanas"; render(); const s = $("#b-c-detalle"); if (s) s.scrollIntoView(); return true; }
+      if (bd.campEditar) { UI.campEdit = bd.campEditar; UI.campBorrador = null; render(); const s = $("#b-c-detalle"); if (s) s.scrollIntoView(); return true; }
+      if ("campCancelar" in bd) { UI.campEdit = null; UI.campBorrador = null; render(); return true; }
+      if (bd.campVer) { UI.campSel = bd.campVer; UI.campEdit = null; render(); const s = $("#b-c-detalle"); if (s) s.scrollIntoView(); return true; }
+      if (bd.campBorrar) { if (UI.borrar === "c" + bd.campBorrar) { for (const o of opsDe(bd.campBorrar)) delete G.oport[o.id]; delete G.campanas[bd.campBorrar]; UI.borrar = null; UI.campSel = null; guardar(); toast("Campaña eliminada"); } else UI.borrar = "c" + bd.campBorrar; render(); return true; }
+      if ("cbTodas" in bd) { const c = UI.campBorrador; const todas = Object.entries(IDX.cartNom).filter(([, n]) => n && n !== "(sin asignar)" && !/vacante/i.test(n)).map(([k]) => k); c.carteras = c.carteras.length === todas.length ? [] : todas.sort(); render(); return true; }
+      if (bd.opNueva) { const id = nuevaOport(bd.opNueva); guardar(); render(); setTimeout(() => { const el = document.querySelector(`input[data-op="${id}"][data-campo="cliente"]`); if (el) el.focus(); }, 30); return true; }
+      if ("opPegar" in bd) { UI.pegar = !UI.pegar; render(); return true; }
+      if (bd.opImportar) { importarPegado(bd.opImportar); return true; }
+      if (bd.opBorrar) { if (UI.borrar === "o" + bd.opBorrar) { delete G.oport[bd.opBorrar]; UI.borrar = null; guardar(); } else UI.borrar = "o" + bd.opBorrar; render(); return true; }
+      if ("motivoNuevo" in bd) { G.config.motivos = [...motivos(), "Nuevo motivo"]; guardar(); render(); return true; }
+      if (bd.motivoBorrar !== undefined) { const L = [...motivos()]; L.splice(+bd.motivoBorrar, 1); G.config.motivos = L; guardar(); render(); return true; }
+      return false;
+    }
+    if (tipo === "change") {
+      if (t.id === "camp-sel") { UI.campSel = t.value; render(); return true; }
+      if (d.cbCart !== undefined) { const c = UI.campBorrador; c.carteras = t.checked ? [...new Set([...c.carteras, t.value])].sort() : c.carteras.filter((x) => x !== t.value); render(); return true; }
+      if ("cbPrincipal" in d) { UI.campBorrador.metas.principal = t.value; return true; }
+      if (d.cb && t.tagName === "SELECT") { UI.campBorrador[d.cb] = t.value; return true; }
+      if (d.op && (t.tagName === "SELECT" || t.type === "date")) {
+        const o = G.oport[d.op]; if (!o) return true; o[d.campo] = t.value;
+        if (d.campo === "estado") { if (t.value !== "abierta" && !o.fecha_cierre) o.fecha_cierre = hoyIso(); if (t.value !== "perdida") o.motivo = ""; if (t.value === "abierta") o.fecha_cierre = ""; }
+        guardar(); render(); return true;
+      }
+      if (d.op) { const o = G.oport[d.op]; if (!o) return true; o[d.campo] = d.campo === "monto" || d.campo === "monto_facturado" ? (t.value.trim() === "" ? (d.campo === "monto" ? 0 : null) : +t.value.replace(/[$,\s]/g, "") || 0) : d.campo === "cliente" ? t.value.trim().toUpperCase() : t.value; guardar(); render(); return true; }
+      if (d.motivo !== undefined) { const L = [...motivos()]; L[+d.motivo] = t.value.trim() || L[+d.motivo]; G.config.motivos = L; guardar(); render(); return true; }
+      return false;
+    }
+    if (tipo === "input") {
+      if (d.cb) { UI.campBorrador[d.cb] = t.value; return true; }
+      if (d.cbMeta) { UI.campBorrador.metas[d.cbMeta] = t.value.replace(/[$,\s]/g, ""); return true; }
+      return false;
+    }
+    if (tipo === "submit" && t.id === "f-campana") { ev.preventDefault(); guardarCampana(); return true; }
+    return false;
+  }
+  document.addEventListener("submit", (ev) => { if (UI.tab === "campanas" || UI.foco) eventosCampana(ev, "submit"); });
+
+  /* ===================================================================== */
+  /*                                USUARIOS                                 */
+  /* ===================================================================== */
+  const US = { lista: null, cargando: false, error: "", form: { nombre: "", email: "", rol: "lector", password: "", pedir: true }, reset: null };
+  const passTemporal = () => { const A = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789"; const r = new Uint32Array(10); crypto.getRandomValues(r); return "Isel-" + [...r].map((x) => A[x % A.length]).join(""); };
+  async function cargarUsuarios() {
+    if (!NUBE) return;
+    US.cargando = true; US.error = "";
+    try { US.lista = (await NUBE.funcion("jm-usuarios", { accion: "listar" })).usuarios || []; }
+    catch (e) { US.error = e.status === 404 ? "La función de usuarios no está instalada en Supabase (jm-usuarios)." : e.message; }
+    US.cargando = false; if (UI.tab === "usuarios") render();
+  }
+  async function accionUsuario(cuerpo, ok) {
+    try { const r = await NUBE.funcion("jm-usuarios", cuerpo); if (ok !== false) toast(ok || (r && r.mensaje) || "Listo"); await cargarUsuarios(); return r; }
+    catch (e) { toast(e.message); if (e.status === 401) sesionPerdida(); else render(); return null; }
+  }
+  function vistaUsuarios() {
+    if (!NUBE) return `<section class="bloque"><header><h2>Usuarios</h2></header><div class="bloque-cuerpo"><div class="aviso info">La administración de usuarios funciona en la versión conectada a Supabase.</div></div></section>`;
+    if (!esAdmin()) return `<section class="bloque"><div class="bloque-cuerpo"><div class="aviso">Solo los administradores pueden ver esta sección.</div></div></section>`;
+    if (US.lista === null && !US.cargando && !US.error) cargarUsuarios();
+    const F = US.form;
+    const filas = (US.lista || []).map((u) => `<tr>
+      <td class="nombre"><b>${esc(u.nombre || "—")}</b><div class="cod" style="margin:0">${esc(u.email)}</div></td>
+      <td><select class="estado-sel" data-us-rol="${u.user_id}" aria-label="Rol de ${esc(u.email)}"><option value="lector" ${u.rol === "lector" ? "selected" : ""}>Solo ver</option><option value="admin" ${u.rol === "admin" ? "selected" : ""}>Administrador</option></select></td>
+      <td><label style="display:flex;gap:6px;align-items:center;font-size:13px"><input type="checkbox" data-us-activo="${u.user_id}" ${u.activo ? "checked" : ""}> ${u.activo ? "Activo" : "Sin acceso"}</label></td>
+      <td class="mono" style="font-size:12px">${u.ultimo_acceso ? new Date(u.ultimo_acceso).toLocaleString("es-MX", { dateStyle: "medium", timeStyle: "short" }) : "Nunca"}</td>
+      <td>${u.debe_cambiar ? '<span class="sem warn">Contraseña temporal</span>' : '<span class="sem ok">Personal</span>'}</td>
+      <td style="white-space:nowrap">${US.reset === u.user_id ? `<span style="display:inline-flex;gap:6px;align-items:center"><input class="campo" id="us-reset-pass" style="width:170px;padding:4px 8px" value="${esc(passTemporal())}" aria-label="Contraseña temporal"><button class="btn chico prim" type="button" data-us-reset-ok="${u.user_id}">Asignar</button><button class="btn chico" type="button" data-us-reset="">Cancelar</button></span>`
+        : `<button class="btn chico" type="button" data-us-reset="${u.user_id}">Asignar contraseña temporal</button> ${u.user_id !== YO.id ? `<button class="btn chico peligro" type="button" data-us-quitar="${u.user_id}">${UI.borrar === "u" + u.user_id ? "Confirmar" : "Quitar acceso"}</button>` : '<span class="cod">tú</span>'}`}</td></tr>`).join("");
+    return `<section class="bloque" id="b-usuarios"><header><h2>Usuarios y accesos</h2><span class="pregunta">Quién puede entrar y qué puede hacer</span></header><div class="bloque-cuerpo">
+      <div class="grid-6-4"><div>
+        <div class="sub">Usuarios con acceso <span class="der"><button class="btn chico" type="button" data-us-recargar>Actualizar</button></span></div>
+        ${US.error ? `<div class="aviso">${esc(US.error)}</div>` : US.lista === null ? `<div class="cargando" style="padding:20px">Cargando usuarios…</div>` : `<div class="tabla-wrap" style="max-height:none"><table class="t"><thead><tr><th>Usuario</th><th>Rol</th><th>Acceso</th><th>Último ingreso</th><th>Contraseña</th><th></th></tr></thead><tbody>${filas}</tbody></table></div>`}
+        <p class="nota-pie"><b>Solo ver:</b> consulta todo y usa filtros, periodos, Ampliar y el simulador, sin modificar nada. <b>Administrador:</b> acceso total, incluida esta sección. Quitar el acceso no borra la cuenta, porque también se usa en el PDI.</p>
+      </div><div>
+        ${US.ultimo ? `<div class="aviso info" style="margin-bottom:10px"><b>Datos de acceso para compartir</b><br>Correo: <span class="mono">${esc(US.ultimo.email)}</span><br>Contraseña temporal: <span class="mono">${esc(US.ultimo.password)}</span><div style="display:flex;gap:8px;margin-top:8px"><button class="btn chico prim" type="button" data-us-copiar>Copiar</button><button class="btn chico" type="button" data-us-ok>Listo</button></div></div>` : ""}
+        <div class="sub">Agregar usuario</div>
+        <form id="f-usuario" class="caja" style="display:flex;flex-direction:column;gap:10px">
+          <div><label class="campo-label" for="us-nombre">Nombre</label><input class="campo" id="us-nombre" data-usf="nombre" value="${esc(F.nombre)}" required></div>
+          <div><label class="campo-label" for="us-email">Correo</label><input class="campo" type="email" id="us-email" data-usf="email" value="${esc(F.email)}" required></div>
+          <div><label class="campo-label" for="us-rol">Rol</label><select class="campo" id="us-rol" data-usf="rol"><option value="lector" ${F.rol === "lector" ? "selected" : ""}>Solo ver</option><option value="admin" ${F.rol === "admin" ? "selected" : ""}>Administrador</option></select></div>
+          <div><label class="campo-label" for="us-pass">Contraseña temporal</label><div style="display:flex;gap:6px"><input class="campo" id="us-pass" data-usf="password" value="${esc(F.password || (F.password = passTemporal()))}" minlength="8" required><button class="btn chico" type="button" data-us-generar>Generar</button></div></div>
+          <label style="display:flex;gap:8px;align-items:flex-start;font-size:13px"><input type="checkbox" id="us-pedir" data-usf="pedir" ${F.pedir ? "checked" : ""}> <span>Pedir cambio de contraseña al entrar<br><span class="nota-pie" style="margin:0">Desmárcalo si es una cuenta de solo vista que compartirán varias personas.</span></span></label>
+          <button class="btn prim" type="submit" id="us-crear">Agregar usuario</button>
+          <p class="nota-pie" style="margin:0">Comparte el correo y la contraseña temporal con la persona por un medio seguro. Si el correo ya tiene cuenta (por ejemplo del PDI), solo se le da acceso y conserva su contraseña.</p>
+        </form></div></div>
+    </div></section>`;
+  }
+  function eventosUsuarios(ev, tipo) {
+    const t = ev.target, d = t.dataset || {};
+    if (tipo === "click") {
+      const b = t.closest("button") || t; const bd = b.dataset || {};
+      if ("usRecargar" in bd) { US.lista = null; US.error = ""; render(); return true; }
+      if ("usGenerar" in bd) { US.form.password = passTemporal(); render(); return true; }
+      if (bd.usReset !== undefined) { US.reset = bd.usReset || null; render(); return true; }
+      if (bd.usResetOk) { const p = ($("#us-reset-pass") || {}).value || ""; if (p.length < 8) { toast("Mínimo 8 caracteres."); return true; } const u = (US.lista || []).find((x) => x.user_id === bd.usResetOk); US.reset = null; accionUsuario({ accion: "password", user_id: bd.usResetOk, password: p, pedir_cambio: true }, "Contraseña temporal asignada").then((r) => { if (r) { US.ultimo = { email: u ? u.email : "", password: p }; render(); } }); return true; }
+      if ("usCopiar" in bd) { copiar(`Correo: ${US.ultimo.email}\nContraseña temporal: ${US.ultimo.password}\nEntra en: ${location.href.split("#")[0]}`); return true; }
+      if ("usOk" in bd) { US.ultimo = null; render(); return true; }
+      if (bd.usQuitar) { if (UI.borrar === "u" + bd.usQuitar) { UI.borrar = null; accionUsuario({ accion: "quitar", user_id: bd.usQuitar }, "Acceso retirado"); } else { UI.borrar = "u" + bd.usQuitar; render(); } return true; }
+      return false;
+    }
+    if (tipo === "change") {
+      if (d.usRol) { accionUsuario({ accion: "rol", user_id: d.usRol, rol: t.value }, "Rol actualizado"); return true; }
+      if (d.usActivo) { accionUsuario({ accion: "activo", user_id: d.usActivo, activo: t.checked }, t.checked ? "Acceso activado" : "Acceso desactivado"); return true; }
+      if (d.usf === "pedir") { US.form.pedir = t.checked; return true; }
+      if (d.usf) { US.form[d.usf] = t.value; return true; }
+      return false;
+    }
+    if (tipo === "input" && d.usf && d.usf !== "pedir") { US.form[d.usf] = t.value; return true; }
+    if (tipo === "submit" && t.id === "f-usuario") {
+      ev.preventDefault();
+      const F = US.form; const b = $("#us-crear"); if (b) { b.disabled = true; b.textContent = "Agregando…"; }
+      accionUsuario({ accion: "crear", nombre: F.nombre, email: F.email, rol: F.rol, password: F.password, pedir_cambio: F.pedir }).then((r) => {
+        if (r) { if (r.nuevo) US.ultimo = { email: F.email.trim().toLowerCase(), password: F.password }; US.form = { nombre: "", email: "", rol: "lector", password: "", pedir: true }; }
+        render();
+      });
+      return true;
+    }
+    return false;
+  }
+  document.addEventListener("submit", (ev) => { if (UI.tab === "usuarios") eventosUsuarios(ev, "submit"); });
+
+  /* ------------------------------------------ solo lectura (rol lector) */
+  const EDITA = ["nota", "juntaCampo", "cf", "an", "canc", "kx", "fc", "cliCart", "ed", "kpi", "cli", "op", "motivo", "cb", "cbCart", "cbMeta", "cbPrincipal"];
+  const ACCIONES_ADMIN = ["modoEd", "compNuevo", "sugerir", "compBorrar", "anRegenerar", "anNuevo", "anBorrar", "anComp", "cancNueva", "cancBorrar", "kxNuevo", "kxBorrar", "fcSem", "igualar", "rest", "edQuitar", "edTodo", "baseReset", "importarTxt", "campNueva", "campEditar", "campBorrar", "opNueva", "opPegar", "opImportar", "opBorrar", "motivoNuevo", "motivoBorrar", "cbTodas"];
+  const esEdicion = (d) => EDITA.some((k) => d[k] !== undefined) || ACCIONES_ADMIN.some((k) => d[k] !== undefined);
+  function bloquearLector(raiz) {
+    document.body.classList.toggle("lector", !esAdmin());
+    if (esAdmin()) return;
+    const sel = EDITA.map((k) => `[data-${k.replace(/[A-Z]/g, (m) => "-" + m.toLowerCase())}]`).join(",");
+    $$(sel, raiz).forEach((el) => { if (el.tagName === "SELECT" || el.type === "checkbox" || el.type === "radio" || el.type === "date" || el.type === "range") el.disabled = true; else el.readOnly = true; el.classList.add("solo-lectura"); });
+    $$(ACCIONES_ADMIN.map((k) => `[data-${k.replace(/[A-Z]/g, (m) => "-" + m.toLowerCase())}]`).join(","), raiz).forEach((el) => { if (el.dataset.fcSem !== undefined) el.disabled = true; else el.hidden = true; });
+    $$('label[for="archivos-excel"], label[for="archivo-resp"], .solo-admin', raiz).forEach((el) => (el.hidden = true));
+    $$("textarea[data-nota]", raiz).forEach((ta) => { if (!ta.value.trim()) { const det = ta.closest("details"); if (det) det.hidden = true; } });
+  }
+
+  /* --------------------------------------------- líneas de tendencia */
+  function regresion(data) {
+    const pts = data.map((y, x) => [x, y]).filter(([, y]) => fin(y));
+    if (pts.length < 3) return null;
+    const n = pts.length, sx = pts.reduce((s, p) => s + p[0], 0), sy = pts.reduce((s, p) => s + p[1], 0);
+    const sxx = pts.reduce((s, p) => s + p[0] * p[0], 0), sxy = pts.reduce((s, p) => s + p[0] * p[1], 0);
+    const den = n * sxx - sx * sx; if (!den) return null;
+    const m = (n * sxy - sx * sy) / den, b = (sy - m * sx) / n;
+    return { m, b, x0: pts[0][0], x1: pts[n - 1][0] };
+  }
+  function agregarTendencias(cfg) {
+    if (G.prefs && G.prefs.tendencias === false) return;
+    if ((cfg.options || {}).indexAxis === "y") return;
+    const C = colores(); const extra = [];
+    (cfg.data.datasets || []).forEach((ds, i) => {
+      if (!ds.tend || ds.tendencia) return;
+      const r = regresion(ds.data || []); if (!r) return;
+      const hasta = Number.isInteger(ds.tendHasta) ? ds.tendHasta : r.x1;
+      const piso = (v) => (fin(ds.tendMin) ? Math.max(ds.tendMin, v) : v);
+      const data = (ds.data || []).map((_, x) => (x >= r.x0 && x <= hasta ? piso(r.m * x + r.b) : null));
+      if (hasta >= data.length) for (let x = data.length; x <= hasta; x++) data.push(piso(r.m * x + r.b));
+      const color = ds.tendColor || (typeof ds.borderColor === "string" ? ds.borderColor : typeof ds.backgroundColor === "string" ? ds.backgroundColor : C.ink2);
+      const paso = ds.tendPaso || "mes";
+      const pend = ds.tend === "M" ? `${r.m >= 0 ? "+" : ""}${etqM(r.m)}/${paso}` : ds.tend === "%" ? `${r.m >= 0 ? "+" : "−"}${Math.abs(r.m * 100).toFixed(1)} pts/${paso}` : ds.tend === "x" ? `${r.m >= 0 ? "+" : "−"}${Math.abs(r.m).toFixed(2)}×/${paso}` : `${r.m >= 0 ? "+" : "−"}${Math.abs(r.m).toFixed(1)}/${paso}`;
+      extra.push({ type: "line", label: `${ds.tendNombre || "Tendencia " + (ds.label || "")} (${pend})`, data, borderColor: color, backgroundColor: color, borderDash: [7, 5], borderWidth: 1.6, pointRadius: 0, pointHoverRadius: 0, fill: false, tendencia: true, order: -10, stack: "__t" + i, yAxisID: ds.yAxisID, spanGaps: true });
+    });
+    cfg.data.datasets.push(...extra);
+  }
+
+  /* ===================================================================== */
+  /*                       NUBE · sincronización con Supabase                */
+  /* ===================================================================== */
+  const COLS_CAMP = ["id", "nombre", "tipo", "estado", "inicio", "fin", "marca", "modelos", "carteras", "objetivo", "metas", "notas"];
+  const COLS_OP = ["id", "campana_id", "cartera", "cliente", "oportunidad", "marca", "modelo", "monto", "estado", "motivo", "detalle", "competidor", "fecha_alta", "fecha_cierre", "fecha_factura", "monto_facturado", "notas"];
+  const SYNC = { reg: new Map(), camp: new Map(), op: new Map(), base: new Map(), ts: null, tsBase: null, enCurso: false, otraVez: false, estado: "ok" };
+  const limpiarFila = (o, cols) => { const r = {}; for (const c of cols) r[c] = o[c] === "" || o[c] === undefined ? null : o[c]; if (cols === COLS_OP) { r.monto = +r.monto || 0; r.monto_facturado = r.monto_facturado == null ? null : +r.monto_facturado || 0; r.cliente = r.cliente || "(sin cliente)"; } if (cols === COLS_CAMP) { r.carteras = r.carteras || []; r.metas = r.metas || {}; r.nombre = r.nombre || "(sin nombre)"; } return r; };
+  // Registros: todo lo que se captura en la junta, como pares colección/clave
+  function registrosActuales() {
+    const m = new Map();
+    for (const [k, v] of Object.entries(G.juntas || {})) m.set(`junta|${k}`, v);
+    for (const x of G.compromisos || []) m.set(`compromiso|${x.id}`, x);
+    for (const t of ["h", "k", "c", "s"]) for (const [k, v] of Object.entries(G.ed[t] || {})) m.set(`edicion|${t}|${k}`, v);
+    for (const [k, v] of Object.entries(G.analisis || {})) m.set(`analisis|${k}`, v);
+    for (const [k, v] of Object.entries(G.cliCart || {})) m.set(`cliente_cartera|${k}`, { cartera: v });
+    for (const [k, v] of Object.entries(G.config || {})) m.set(`config|${k}`, v);
+    return m;
+  }
+  function aplicarRegistro(col, clave, datos, borrado) {
+    if (col === "junta") { if (borrado) delete G.juntas[clave]; else G.juntas[clave] = datos; }
+    else if (col === "compromiso") { G.compromisos = G.compromisos.filter((x) => x.id !== clave); if (!borrado) G.compromisos.push(datos); }
+    else if (col === "edicion") { const i = clave.indexOf("|"); const t = clave.slice(0, i), k = clave.slice(i + 1); if (G.ed[t]) { if (borrado) delete G.ed[t][k]; else G.ed[t][k] = datos; } }
+    else if (col === "analisis") { if (borrado) delete G.analisis[clave]; else G.analisis[clave] = datos; }
+    else if (col === "cliente_cartera") { if (borrado) delete G.cliCart[clave]; else G.cliCart[clave] = datos.cartera; }
+    else if (col === "config") { if (borrado) delete G.config[clave]; else G.config[clave] = datos; }
+  }
+  const claveReg = (r) => `${r.coleccion}|${r.clave}`;
+  const masReciente = (a, b) => (!a ? b : !b ? a : a > b ? a : b);
+
+  function marcarEstado(e, detalle) {
+    SYNC.estado = e;
+    const el = document.getElementById("estado-sync");
+    if (el) { el.dataset.e = e; el.textContent = { pendiente: "Guardando…", ok: "Guardado", error: "Sin guardar · reintentar" }[e] || ""; el.title = detalle || ""; }
+  }
+  function programarSync() {
+    marcarEstado("pendiente");
+    clearTimeout(guardadoPend);
+    guardadoPend = setTimeout(sincronizar, 700);
+  }
+  async function sincronizar() {
+    if (!NUBE || !esAdmin()) return;
+    if (SYNC.enCurso) { SYNC.otraVez = true; return; }
+    SYNC.enCurso = true;
+    try {
+      // Registros
+      const act = registrosActuales(); const subir = [];
+      for (const [k, v] of act) { const j = JSON.stringify(v); if (SYNC.reg.get(k) !== j) { const i = k.indexOf("|"); subir.push({ coleccion: k.slice(0, i), clave: k.slice(i + 1), datos: v, borrado: false, _j: j, _k: k }); } }
+      for (const k of SYNC.reg.keys()) if (!act.has(k)) { const i = k.indexOf("|"); subir.push({ coleccion: k.slice(0, i), clave: k.slice(i + 1), datos: {}, borrado: true, _j: null, _k: k }); }
+      for (let i = 0; i < subir.length; i += 200) {
+        const lote = subir.slice(i, i + 200);
+        await NUBE.db.guardar("jm_registros", lote.map(({ _j, _k, ...r }) => r), "coleccion,clave");
+        lote.forEach((r) => (r._j === null ? SYNC.reg.delete(r._k) : SYNC.reg.set(r._k, r._j)));
+      }
+      // Campañas y oportunidades
+      for (const [tabla, obj, mapa, cols] of [["jm_campanas", G.campanas, SYNC.camp, COLS_CAMP], ["jm_campana_oport", G.oport, SYNC.op, COLS_OP]]) {
+        const filas = [];
+        for (const [id, o] of Object.entries(obj || {})) { const f = limpiarFila(o, cols); const j = JSON.stringify(f); if (mapa.get(id) !== j) filas.push({ f, j, id }); }
+        const borrar = [...mapa.keys()].filter((id) => !(obj || {})[id]);
+        if (filas.length) { await NUBE.db.guardar(tabla, filas.map((x) => ({ ...x.f, borrado: false })), "id"); filas.forEach((x) => mapa.set(x.id, x.j)); }
+        for (const id of borrar) { await NUBE.db.cambiar(tabla, { id }, { borrado: true }); mapa.delete(id); }
+      }
+      marcarEstado("ok");
+    } catch (e) {
+      console.error(e); marcarEstado("error", e.message);
+      if (e.status === 401) return sesionPerdida();
+      toast("No se pudo guardar: " + e.message);
+    } finally {
+      SYNC.enCurso = false;
+      if (SYNC.otraVez) { SYNC.otraVez = false; sincronizar(); }
+    }
+  }
+
+  // Datos de los reportes: se guardan en partes (base, facturas por mes, fotos por mes)
+  function partesBase(B) {
+    const P = new Map();
+    const { facturas, fotos, ...resto } = B;
+    P.set("base", resto);
+    if (facturas) {
+      const { docs, ...meta } = facturas; P.set("facturas:meta", meta);
+      const porMes = {}; for (const d of docs || []) (porMes[d[1].slice(0, 7)] = porMes[d[1].slice(0, 7)] || []).push(d);
+      for (const [m, L] of Object.entries(porMes)) P.set("facturas:" + m, L);
+    }
+    for (const [m, f] of Object.entries(fotos || {})) P.set("fotos:" + m, f);
+    return P;
+  }
+  function armarBase(filas) {
+    const r = new Map(filas.map((f) => [f.clave, f.datos]));
+    if (!r.has("base")) return null;
+    const B = r.get("base");
+    if (r.has("facturas:meta")) {
+      const docs = []; [...r.keys()].filter((k) => /^facturas:\d{4}-\d{2}$/.test(k)).sort().forEach((k) => docs.push(...r.get(k)));
+      B.facturas = Object.assign({}, r.get("facturas:meta"), { docs });
+    }
+    const fotos = {}; for (const [k, v] of r) if (k.startsWith("fotos:")) fotos[k.slice(6)] = v;
+    if (Object.keys(fotos).length) B.fotos = fotos;
+    return B;
+  }
+  async function guardarBase(B, avance) {
+    const P = partesBase(B); const subir = [];
+    for (const [k, v] of P) { const j = JSON.stringify(v); if (SYNC.base.get(k) !== j) subir.push({ clave: k, datos: v, _j: j }); }
+    let n = 0;
+    for (const x of subir) {
+      if (avance) avance(`Guardando en el servidor ${++n} de ${subir.length}…`);
+      await NUBE.db.guardar("jm_base", [{ clave: x.clave, datos: x.datos }], "clave");
+      SYNC.base.set(x.clave, x._j);
+    }
+    SYNC.tsBase = new Date().toISOString();
+  }
+
+  async function cargarNube() {
+    const [base, regs, camps, ops] = await Promise.all([
+      NUBE.db.leer("jm_base"), NUBE.db.leer("jm_registros", { filtro: { borrado: false } }),
+      NUBE.db.leer("jm_campanas", { filtro: { borrado: false } }), NUBE.db.leer("jm_campana_oport", { filtro: { borrado: false } }),
+    ]);
+    BASE = armarBase(base);
+    SYNC.base = new Map(base.map((f) => [f.clave, JSON.stringify(f.datos)]));
+    SYNC.tsBase = base.reduce((m, f) => masReciente(m, f.actualizado_en), null);
+    const prefs = G.prefs; G = vacio(); G.prefs = prefs;
+    for (const r of regs) { aplicarRegistro(r.coleccion, r.clave, r.datos, false); }
+    SYNC.reg = new Map([...registrosActuales()].map(([k, v]) => [k, JSON.stringify(v)]));
+    for (const c of camps) G.campanas[c.id] = limpiarFila(c, COLS_CAMP);
+    for (const o of ops) G.oport[o.id] = limpiarFila(o, COLS_OP);
+    SYNC.camp = new Map(Object.entries(G.campanas).map(([id, o]) => [id, JSON.stringify(limpiarFila(o, COLS_CAMP))]));
+    SYNC.op = new Map(Object.entries(G.oport).map(([id, o]) => [id, JSON.stringify(limpiarFila(o, COLS_OP))]));
+    SYNC.ts = [...regs, ...camps, ...ops].reduce((m, f) => masReciente(m, f.actualizado_en), null) || new Date(0).toISOString();
+  }
+
+  // Revisa cambios hechos por otras personas (cada 30 s con la pestaña visible)
+  let RENDER_PEND = false;
+  const editando = () => { const a = document.activeElement; return a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && a.type !== "search" && a.type !== "range"; };
+  function renderSeguro() { if (editando() || UI.abierto) RENDER_PEND = true; else { if (BASE) indexar(); render(); } }
+  document.addEventListener("focusout", () => setTimeout(() => { if (RENDER_PEND && !editando()) { RENDER_PEND = false; if (BASE) indexar(); render(); } }, 50));
+  async function revisarCambios() {
+    if (!NUBE || !YO || document.hidden || SYNC.enCurso || SYNC.estado === "pendiente") return;
+    try {
+      const yo = (await NUBE.db.leer("jm_acceso", { filtro: { user_id: YO.id } }))[0];
+      if (!yo || !yo.activo) { await salir("Tu acceso a esta herramienta fue retirado."); return; }
+      if (yo.rol !== YO.rol) { YO.rol = yo.rol; UI.modoEdicion = false; toast(yo.rol === "admin" ? "Ahora tienes acceso de administrador." : "Tu acceso cambió a solo lectura."); render(); }
+      const desde = SYNC.ts || new Date(0).toISOString();
+      const [regs, camps, ops, base] = await Promise.all([
+        NUBE.db.leer("jm_registros", { filtro: { actualizado_en: ["gt", desde] } }), NUBE.db.leer("jm_campanas", { filtro: { actualizado_en: ["gt", desde] } }),
+        NUBE.db.leer("jm_campana_oport", { filtro: { actualizado_en: ["gt", desde] } }), NUBE.db.leer("jm_base", { select: "clave,actualizado_en", filtro: { actualizado_en: ["gt", SYNC.tsBase || desde] } }),
+      ]);
+      let cambio = false;
+      const locales = registrosActuales();
+      for (const r of regs) {
+        const k = claveReg(r); const loc = locales.get(k);
+        const pendiente = (loc ? JSON.stringify(loc) : undefined) !== SYNC.reg.get(k);
+        if (!pendiente) { aplicarRegistro(r.coleccion, r.clave, r.datos, r.borrado); if (r.borrado) SYNC.reg.delete(k); else SYNC.reg.set(k, JSON.stringify(r.datos)); cambio = true; }
+      }
+      for (const [rows, obj, mapa, cols] of [[camps, G.campanas, SYNC.camp, COLS_CAMP], [ops, G.oport, SYNC.op, COLS_OP]]) for (const r of rows) {
+        const loc = obj[r.id] ? JSON.stringify(limpiarFila(obj[r.id], cols)) : undefined;
+        if (loc !== mapa.get(r.id)) continue;
+        if (r.borrado) { delete obj[r.id]; mapa.delete(r.id); } else { obj[r.id] = limpiarFila(r, cols); mapa.set(r.id, JSON.stringify(obj[r.id])); }
+        cambio = true;
+      }
+      SYNC.ts = [...regs, ...camps, ...ops].reduce((m, f) => masReciente(m, f.actualizado_en), SYNC.ts);
+      if (base.length) { SYNC.tsBase = base.reduce((m, f) => masReciente(m, f.actualizado_en), SYNC.tsBase); avisoDatosNuevos(); }
+      if (cambio) renderSeguro();
+    } catch (e) { if (e.status === 401) sesionPerdida(); }
+  }
+  function avisoDatosNuevos() {
+    if (document.getElementById("aviso-datos")) return;
+    const d = document.createElement("div"); d.id = "aviso-datos"; d.className = "aviso-flotante";
+    d.innerHTML = `<span>Hay datos nuevos de los reportes.</span><button class="btn chico prim" type="button" data-recargar-base>Actualizar</button>`;
+    document.body.appendChild(d);
+  }
+  async function recargarBase() {
+    const el = document.getElementById("aviso-datos"); if (el) el.remove();
+    try { const base = await NUBE.db.leer("jm_base"); BASE = armarBase(base); SYNC.base = new Map(base.map((f) => [f.clave, JSON.stringify(f.datos)])); FAC = null; VCF = null; indexar(); render(); toast("Datos actualizados"); }
+    catch (e) { toast("No se pudieron actualizar los datos: " + e.message); }
+  }
+
+  /* ------------------------------------------------- inactividad (10 min) */
+  const INACT_MS = 10 * 60 * 1000, AVISO_MS = 60 * 1000, LS_ACT = "isel-jm-actividad";
+  let ultimaAct = Date.now(), relojInact = null, ultimaEscritura = 0;
+  function actividad() {
+    ultimaAct = Date.now();
+    if (ultimaAct - ultimaEscritura > 5000) { ultimaEscritura = ultimaAct; try { localStorage.setItem(LS_ACT, String(ultimaAct)); } catch (e) {} }
+    const av = document.getElementById("aviso-inact"); if (av) av.remove();
+  }
+  ["pointerdown", "keydown", "wheel", "touchstart", "scroll"].forEach((ev) => window.addEventListener(ev, (e) => { if (YO && !(e.target && e.target.closest && e.target.closest("#aviso-inact"))) actividad(); }, { passive: true, capture: true }));
+  let ultimoMov = 0;
+  window.addEventListener("mousemove", (e) => { if (YO && Date.now() - ultimoMov > 3000 && !(e.target && e.target.closest && e.target.closest("#aviso-inact"))) { ultimoMov = Date.now(); actividad(); } }, { passive: true });
+  const actividadCompartida = () => { let x = 0; try { x = +localStorage.getItem(LS_ACT) || 0; } catch (e) {} return Math.max(ultimaAct, x); };
+  function vigilarInactividad() {
+    clearInterval(relojInact);
+    actividad();
+    relojInact = setInterval(() => {
+      if (!YO) return;
+      const resta = INACT_MS - (Date.now() - actividadCompartida());
+      if (resta <= 0) { salir("Tu sesión se cerró después de 10 minutos sin actividad."); return; }
+      let av = document.getElementById("aviso-inact");
+      if (resta <= AVISO_MS) {
+        if (!av) {
+          av = document.createElement("div"); av.id = "aviso-inact"; av.className = "modal-fondo"; av.setAttribute("role", "alertdialog"); av.setAttribute("aria-modal", "true");
+          av.innerHTML = `<div class="modal"><strong>¿Sigues ahí?</strong><p>Por seguridad, la sesión se cerrará en <b id="inact-seg">60</b> segundos por inactividad.</p><div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn" type="button" data-salir>Cerrar sesión</button><button class="btn prim" type="button" data-seguir>Seguir conectado</button></div></div>`;
+          document.body.appendChild(av); const b = av.querySelector("[data-seguir]"); if (b) b.focus();
+        }
+        const s = document.getElementById("inact-seg"); if (s) s.textContent = Math.ceil(resta / 1000);
+      } else if (av) av.remove();
+    }, 1000);
+  }
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && YO) { if (Date.now() - actividadCompartida() >= INACT_MS) salir("Tu sesión se cerró después de 10 minutos sin actividad."); else revisarCambios(); } });
+  setInterval(() => revisarCambios(), 30000);
+
+  /* --------------------------------------------------- acceso y sesión */
+  async function salir(mensaje) {
+    if (NUBE && esAdmin() && SYNC.estado === "pendiente") { clearTimeout(guardadoPend); try { await sincronizar(); } catch (e) {} }
+    YO = null; clearInterval(relojInact);
+    ["aviso-inact", "aviso-datos"].forEach((id) => { const el = document.getElementById(id); if (el) el.remove(); });
+    try { localStorage.removeItem(LS_ACT); } catch (e) {}
+    if (NUBE) await NUBE.auth.salir();
+    BASE = null; G = Object.assign(vacio(), { prefs: G.prefs }); UI.foco = null; UI.modoEdicion = false; document.body.classList.remove("en-pres", "lector");
+    pantallaLogin(mensaje);
+  }
+  function sesionPerdida() { if (YO) salir("Tu sesión expiró. Vuelve a entrar."); }
+  function cajaAcceso(contenido) {
+    document.body.classList.remove("en-pres", "lector");
+    document.getElementById("app").innerHTML = `<div class="acceso"><div class="acceso-caja"><strong>ISEL</strong><p>Junta mensual de resultados de ventas</p>${contenido}</div></div>`;
+  }
+  function pantallaLogin(mensaje, error) {
+    cajaAcceso(`${mensaje ? `<div class="aviso info">${esc(mensaje)}</div>` : ""}
+      <form id="f-login" style="display:flex;flex-direction:column;gap:12px">
+        <label class="campo-label" for="l-email">Correo</label><input class="campo" type="email" id="l-email" autocomplete="username" required>
+        <label class="campo-label" for="l-pass">Contraseña</label><input class="campo" type="password" id="l-pass" autocomplete="current-password" required>
+        ${error ? `<span class="error">${esc(error)}</span>` : ""}
+        <button class="btn prim" type="submit" id="l-entrar">Entrar</button>
+      </form><p class="nota-pie">¿Olvidaste tu contraseña? Pídele al administrador que te asigne una temporal.</p>`);
+    $("#l-email").focus();
+    $("#f-login").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const b = $("#l-entrar"); b.disabled = true; b.textContent = "Entrando…";
+      try { await NUBE.auth.entrar($("#l-email").value, $("#l-pass").value); await entrarConSesion(); }
+      catch (x) { const em = $("#l-email").value; pantallaLogin(null, x.message); $("#l-email").value = em; $("#l-pass").focus(); }
+    });
+  }
+  function pantallaCambio(forzado, error) {
+    cajaAcceso(`<form id="f-cambio" style="display:flex;flex-direction:column;gap:12px">
+        <div class="aviso info">${forzado ? "Entraste con una contraseña temporal. Define tu contraseña personal para continuar." : "Cambia tu contraseña."}</div>
+        <label class="campo-label" for="c-pass1">Nueva contraseña (mínimo 8 caracteres)</label><input class="campo" type="password" id="c-pass1" minlength="8" autocomplete="new-password" required>
+        <label class="campo-label" for="c-pass2">Repite la contraseña</label><input class="campo" type="password" id="c-pass2" minlength="8" autocomplete="new-password" required>
+        ${error ? `<span class="error">${esc(error)}</span>` : ""}
+        <div style="display:flex;gap:8px;justify-content:flex-end">${forzado ? `<button class="btn" type="button" data-salir>Salir</button>` : `<button class="btn" type="button" data-cancelar-cambio>Cancelar</button>`}<button class="btn prim" type="submit">Guardar contraseña</button></div>
+      </form>`);
+    $("#c-pass1").focus();
+    $("#f-cambio").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const a = $("#c-pass1").value, b = $("#c-pass2").value;
+      if (a.length < 8) return pantallaCambio(forzado, "La contraseña debe tener al menos 8 caracteres.");
+      if (a !== b) return pantallaCambio(forzado, "Las contraseñas no coinciden.");
+      try { await NUBE.auth.cambiarPassword(a); await NUBE.db.rpc("jm_password_cambiada"); toast("Contraseña actualizada"); await entrarConSesion(); }
+      catch (x) { pantallaCambio(forzado, x.message); }
+    });
+  }
+  async function entrarConSesion() {
+    const s = NUBE.auth.sesion(); if (!s) return pantallaLogin();
+    cajaAcceso(`<div class="cargando" style="padding:20px 0">Cargando datos…</div>`);
+    let yo;
+    try { yo = (await NUBE.db.leer("jm_acceso", { filtro: { user_id: s.user.id } }))[0]; }
+    catch (e) { if (e.status === 401) { NUBE.auth.olvidar(); return pantallaLogin("Tu sesión expiró. Vuelve a entrar."); } return pantallaLogin(null, e.message); }
+    if (!yo || !yo.activo) { await NUBE.auth.salir(); return pantallaLogin(null, "Tu cuenta no tiene acceso a esta herramienta. Pídele acceso al administrador."); }
+    YO = { id: s.user.id, email: yo.email || s.user.email, nombre: yo.nombre || "", rol: yo.rol };
+    if (yo.debe_cambiar) return pantallaCambio(true);
+    vigilarInactividad();
+    try { await cargarNube(); } catch (e) { return cajaAcceso(`<div class="aviso">No se pudieron cargar los datos: ${esc(e.message)}</div><button class="btn" type="button" data-salir>Salir</button>`); }
+    if (!BASE) return pantallaSinBase();
+    arrancar();
+  }
+  function pantallaSinBase() {
+    if (!esAdmin()) return cajaAcceso(`<div class="aviso info">El administrador todavía no ha cargado los reportes.</div><button class="btn" type="button" data-salir>Salir</button>`);
+    cajaAcceso(`<div class="aviso info">La base de datos está vacía. Carga los reportes para empezar.</div>
+      <div class="sub" style="margin:4px 0 0">Opción 1 · Datos actuales de la página</div>
+      <p class="nota-pie" style="margin:0">Importa los datos que ya tenía la página (Resultado de ventas 2025 y 2026, Tablero de septiembre y facturas de Odoo) con la clave de acceso anterior.</p>
+      <form id="f-importar" style="display:flex;gap:8px;flex-wrap:wrap"><input class="campo" type="password" id="i-clave" placeholder="Clave anterior" style="flex:1;min-width:160px" required><button class="btn prim" type="submit">Importar</button></form>
+      <div class="sub" style="margin:8px 0 0">Opción 2 · Archivos de Excel</div>
+      <label class="btn" for="archivos-excel" style="width:max-content">Elegir archivos de Excel</label><input type="file" id="archivos-excel" accept=".xlsx,.xlsm,.xls,.csv" multiple hidden>
+      <p class="nota-pie" id="estado-carga">Resultado de ventas del año (y del anterior), Tablero ISEL del mes y Estadísticas de facturas de Odoo.</p>
+      <button class="btn chico" type="button" data-salir>Salir</button>`);
+    $("#f-importar").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const est = $("#estado-carga");
+      try {
+        est.textContent = "Descifrando…";
+        const paq = await (await fetch("datos.enc.json", { cache: "no-store" })).json();
+        const B = await descifrar(paq, $("#i-clave").value);
+        await guardarBase(B, (m) => (est.textContent = m));
+        BASE = B; arrancar(); toast("Datos importados");
+      } catch (x) { est.textContent = x.name === "OperationError" ? "La clave no es correcta." : "No se pudo importar: " + x.message; }
+    });
   }
 
   /* ----------------------------------------------------- arranque */
@@ -1645,16 +2423,25 @@
     });
   }
   function arrancar() {
-    try { const b = localStorage.getItem(LS_BASE); if (b) { const x = JSON.parse(b); if (x && x.hechos) { BASE = x; G_BASE_LOCAL = true; } } } catch (e) {}
+    if (!NUBE) try { const b = localStorage.getItem(LS_BASE); if (b) { const x = JSON.parse(b); if (x && x.hechos) { BASE = x; G_BASE_LOCAL = true; } } } catch (e) {}
+    if (!esAdmin()) UI.modoEdicion = false;
     if (G.prefs.tema) document.documentElement.dataset.theme = G.prefs.tema;
     indexar(); ajustarPeriodo();
-    const mh = location.hash.match(/^#ver-([a-z]+)$/);
-    if (mh) { if (BLOQUES.some((b) => b[0] === mh[1])) { UI.tab = "junta"; UI.foco = mh[1]; } else if (SECC2.some((b) => b[0] === mh[1])) { UI.tab = "analisis"; UI.foco = mh[1]; } }
+    const mh2 = location.hash.match(/^#ver-([a-z-]+)$/);
+    if (mh2) { const id = mh2[1]; if (BLOQUES.some((b) => b[0] === id)) { UI.tab = "junta"; UI.foco = id; } else if (SECC2.some((b) => b[0] === id)) { UI.tab = "analisis"; UI.foco = id; } else if (CAMP_SECC.some((b) => b[0] === id)) { UI.tab = "campanas"; UI.foco = id; } }
     render();
-    if (window.matchMedia) matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => render());
+    if (window.matchMedia && !arrancar.tema) { arrancar.tema = true; matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (BASE && document.querySelector(".top")) render(); }); }
   }
   async function iniciar() {
     if (window.DATOS_BASE) { BASE = window.DATOS_BASE; arrancar(); return; }
+    if (CONF) {
+      if (G.prefs.tema) document.documentElement.dataset.theme = G.prefs.tema;
+      NUBE = window.Nube.crear(CONF.url, CONF.llave);
+      if (!NUBE.auth.sesion()) return pantallaLogin();
+      let ultima = 0; try { ultima = +localStorage.getItem(LS_ACT) || 0; } catch (e) {}
+      if (ultima && Date.now() - ultima >= INACT_MS) { await NUBE.auth.salir(); try { localStorage.removeItem(LS_ACT); } catch (e) {} return pantallaLogin("Tu sesión se cerró después de 10 minutos sin actividad."); }
+      return entrarConSesion();
+    }
     try { const b = localStorage.getItem(LS_BASE); if (b && JSON.parse(b).hechos) { BASE = JSON.parse(b); arrancar(); return; } } catch (e) {}
     try {
       const r = await fetch("datos.enc.json", { cache: "no-store" });

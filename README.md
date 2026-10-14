@@ -34,20 +34,59 @@ concentración de carteras y clientes, movimiento de clientes, tipo de cliente y
   indicadores. Cada valor modificado se marca con un punto y se puede restaurar.
 - **Compromisos y notas** se guardan al escribir.
 
-## Dónde viven los datos
+## Acceso y roles
 
-- `datos.enc.json`: cifras extraídas de los reportes de Excel, **cifradas** (AES-GCM). El
-  repositorio es público, así que sin la clave nadie puede leer montos, vendedores ni clientes.
-  La clave se escribe una vez por equipo (opción *Recordar en este equipo*).
-- Compromisos, notas y cifras modificadas se guardan **en el navegador** de quien las captura.
-  Para pasarlas a otra computadora: pestaña **Datos → Descargar respaldo** y en la otra
-  **Cargar respaldo**. Conviene descargar un respaldo al terminar cada junta.
+La página se conecta a Supabase (proyecto **ISEL - PDI**, tablas `jm_*`). Cada persona entra con
+su correo y contraseña.
+
+| | Administrador | Solo ver |
+|---|---|---|
+| Ver todo, filtros, periodos, Ampliar, simulador | Sí | Sí |
+| Modificar cifras, notas, compromisos, análisis | Sí | No |
+| Cargar reportes de Excel | Sí | No |
+| Crear y editar campañas y oportunidades | Sí | No |
+| Pestaña Usuarios | Sí | No |
+
+Las reglas viven en la base de datos (RLS): aunque alguien manipule la página, el servidor rechaza
+cualquier cambio de un usuario de solo vista.
+
+- **Usuarios:** el administrador agrega personas con su correo, rol y una contraseña temporal. Al
+  entrar por primera vez se les pide definir su contraseña (se puede desactivar para una cuenta de
+  solo vista compartida). Si el correo ya existe por el PDI, solo se le da acceso.
+- **Inactividad:** a los 9 minutos sin actividad aparece un aviso y a los 10 se cierra la sesión.
+- **Cambios en vivo:** cada 30 segundos la página trae lo que otros capturaron (compromisos, notas,
+  campañas). Si el administrador carga reportes nuevos, aparece el aviso *Actualizar*.
+
+## Campañas
+
+Pestaña **Campañas**, capturada a mano:
+
+- **Campaña:** nombre, tipo (Outbound / Inbound), estado, fechas, marca, modelos, carteras que
+  participan, objetivo y metas (monto ganado, facturado, cotizado, oportunidades, clientes). Una
+  meta se marca como principal.
+- **Oportunidades:** cartera, cliente, oportunidad, modelo, monto, estado (abierta, ganada, perdida),
+  motivo de pérdida, competidor, fechas y monto facturado. Se pueden pegar varias desde Excel.
+- **Tablero:** avance contra tiempo transcurrido, proyección por tendencia, resultado por cartera,
+  modelos, tasa de cierre, ciclo de venta y análisis de pérdidas por motivo, cartera y competidor.
+  El catálogo de motivos es editable.
+
+## Líneas de tendencia
+
+Las gráficas en el tiempo muestran una línea punteada de tendencia (regresión lineal) con su
+pendiente en la leyenda. El botón **↗ Tendencias** de la barra superior las muestra u oculta.
+
+## Instalación en Supabase (una sola vez)
+
+1. Ejecutar `schema.sql` en **SQL Editor**.
+2. Publicar la función `supabase/functions/jm-usuarios` (Edge Functions, con verificación de JWT).
+3. Entrar con el administrador; si la base está vacía, la página ofrece importar los datos
+   anteriores (con la clave previa) o cargar los Excel.
 
 ## Actualizar cada mes
 
-**Opción rápida (desde la página):** pestaña **Datos → Elegir archivos de Excel** y selecciona
-el *Resultado de ventas* del año y el *Tablero ISEL* actualizados. La página los lee en el
-navegador; los archivos no se suben a ningún lado. Lo cargado queda en ese navegador.
+Pestaña **Datos → Elegir archivos de Excel** (administrador): *Resultado de ventas* del año,
+*Tablero ISEL* del mes y *Estadísticas de facturas* de Odoo. La página los lee en el navegador y
+guarda las cifras en Supabase; todos los usuarios ven los datos nuevos.
 
 **Facturas de Odoo:** cada mes carga también *Estadísticas de facturas* (Odoo → Contabilidad →
 Reportes, exportado a Excel con todas las columnas). Con él:
@@ -65,14 +104,6 @@ varias carteras y filtrar el movimiento de clientes por cualquier periodo, carga
 de ventas por cliente de SAE u Odoo (Excel o CSV) con fecha, cliente, cartera o vendedor e importe.
 Sin ese archivo se usan los listados del Tablero (un trimestre fijo) y la cartera se asigna a mano.
 
-**Opción para todos (actualizar el sitio):** después de cargarlos, el sitio publicado sigue
-con los datos anteriores para los demás. Para publicarlos, pide a Claude que regenere
-`datos.enc.json` con los Excel nuevos, o usa `herramientas/cifrar.mjs` con un `datos.json`.
-
-```
-node herramientas/cifrar.mjs datos.json datos.enc.json "clave"
-```
-
 ## Publicar en GitHub Pages
 
 Settings → Pages → Branch `main`, carpeta `/ (root)`. Queda en
@@ -83,9 +114,13 @@ Settings → Pages → Branch `main`, carpeta `/ (root)`. Queda en
 ```
 index.html            Página
 styles.css            Estilos
+js/config.js          Conexión con Supabase
+js/nube.js            Cliente de Supabase (acceso, datos, función de usuarios)
 js/parser.js          Lectura de los reportes de Excel
-js/app.js             Vistas, filtros, edición, compromisos y respaldo
-datos.enc.json        Datos cifrados
+js/app.js             Vistas, filtros, edición, compromisos, campañas, usuarios y sesión
+schema.sql            Tablas y reglas de acceso
+supabase/functions/   Función jm-usuarios (alta y administración de usuarios)
+datos.enc.json        Datos anteriores cifrados (solo para la importación inicial)
 herramientas/         Cifrado de datos
 ```
 

@@ -154,3 +154,28 @@ end $$;
 insert into public.jm_acceso (user_id, email, nombre, rol, creado_por)
 select id, email, 'Iván Nava', 'admin', 'instalación' from auth.users where email = 'ivan.n@isel.com.mx'
 on conflict (user_id) do update set rol = 'admin', activo = true;
+
+-- ------------------------------------- Campañas: productos y oportunidades ---
+alter table public.jm_campanas
+  add column if not exists productos jsonb not null default '[]'::jsonb;
+
+alter table public.jm_campana_oport
+  add column if not exists cantidad numeric(14, 2),
+  add column if not exists partidas jsonb not null default '[]'::jsonb,
+  add column if not exists contacto text,
+  add column if not exists origen text,
+  add column if not exists etapa text,
+  add column if not exists probabilidad integer check (probabilidad between 0 and 100),
+  add column if not exists fecha_estimada date,
+  add column if not exists cotizacion text,
+  add column if not exists factura text,
+  add column if not exists linea text,
+  add column if not exists numero_parte text;
+
+-- Ajustes por campaña: moneda, paridad, metas por cartera, indicadores propios y datos del último reporte
+alter table public.jm_campanas
+  add column if not exists ajustes jsonb not null default '{}'::jsonb;
+
+-- Partidas facturadas de una oportunidad ganada (piezas vendidas reales)
+alter table public.jm_campana_oport
+  add column if not exists venta jsonb not null default '[]'::jsonb;

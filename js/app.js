@@ -1405,7 +1405,7 @@
           <button class="btn chico prim" data-pres-cerrar type="button" title="Cerrar (Esc)">✕ Cerrar</button>
         </span>
       </div>
-      <div class="pres-cuerpo">${cuerpo}</div></div>`;
+      <div class="pres-cuerpo">${cuerpo}</div></div>${modalHTML()}`;
     document.body.classList.add("en-pres");
     bloquearLector(document.getElementById("app"));
     return true;
@@ -1436,7 +1436,7 @@
       console.error(e);
       cuerpo = `<div class="wrap sin-indice"><div class="aviso">No se pudo armar esta vista: ${esc(e.message)}. Revisa la pestaña Datos.</div></div>`;
     }
-    document.getElementById("app").innerHTML = cabecera() + cuerpo;
+    document.getElementById("app").innerHTML = cabecera() + cuerpo + modalHTML();
     document.body.classList.toggle("editando", UI.modoEdicion);
     bloquearLector(document.getElementById("app"));
     baseChart();
@@ -1484,6 +1484,7 @@
     if ("miPass" in d) { pantallaCambio(false); return; }
     if ("cancelarCambio" in d) { arrancar(); return; }
     if (!esAdmin() && esEdicion(d)) { toast("Tu acceso es de solo lectura."); return; }
+    if (UI.modal && eventosModal(ev, "click")) return;
     if (d.tendencias !== undefined) { G.prefs.tendencias = G.prefs.tendencias === false; guardar(); render(); return; }
     if (UI.tab === "usuarios" && eventosUsuarios(ev, "click")) return;
     if ((UI.tab === "campanas" || UI.foco) && eventosCampana(ev, "click")) return;
@@ -1530,6 +1531,7 @@
   document.addEventListener("change", (ev) => {
     const t = ev.target, d = t.dataset;
     if (!esAdmin() && esEdicion(d)) return;
+    if (UI.modal && eventosModal(ev, "change")) return;
     if (UI.tab === "usuarios" && eventosUsuarios(ev, "change")) return;
     if (UI.tab === "campanas" && eventosCampana(ev, "change")) return;
     if (t.id === "p-anio") { P.anio = +t.value; if (P.mes > Math.max(cerrado(P.anio), 1) && P.anio < hoy.getFullYear()) P.mes = Math.min(P.mes, 12); render(); return; }
@@ -1554,6 +1556,7 @@
   document.addEventListener("input", (ev) => {
     const t = ev.target, d = t.dataset;
     if (!esAdmin() && esEdicion(d)) return;
+    if (UI.modal && eventosModal(ev, "input")) return;
     if (UI.tab === "usuarios" && eventosUsuarios(ev, "input")) return;
     if (UI.tab === "campanas" && eventosCampana(ev, "input")) return;
     if (d.nota) { junta(ctx().clave).notas[d.nota] = t.value; guardar(); return; }
@@ -1566,6 +1569,7 @@
     if (d.an) { const A = G.analisis[ctx().clave]; if (!A) return; if (d.an === "situacion") A.situacion = t.value; else if (d.an === "enfoque") A.enfoque[+d.i] = t.value; else A[d.an][+d.i][d.campo] = t.value; guardar(); return; }
   });
   document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && UI.modal) { UI.modal = null; render(); return; }
     if (ev.key === "Escape" && UI.abierto) { UI.abierto = null; render(); return; }
     if (UI.foco && !ev.target.closest("input, textarea, select")) {
       if (ev.key === "Escape") { cerrarFoco(); return; }
@@ -1672,16 +1676,77 @@
   const METRICAS = [
     ["ganado", "Monto ganado", "$", "cierre"], ["facturado", "Monto facturado", "$", "factura"], ["cotizado", "Monto cotizado", "$", "alta"],
     ["oport", "Oportunidades generadas", "#", "alta"], ["ganadas", "Oportunidades ganadas", "#", "cierre"], ["clientes", "Clientes con oportunidad", "#", "alta"], ["clientes_g", "Clientes que compraron", "#", "cierre"],
+    ["pz_cot", "Piezas cotizadas", "pz", "alta"], ["pz_gan", "Piezas vendidas", "pz", "cierre"],
   ];
+  const ETAPAS = [["prospeccion", "Prospección", 10], ["calificada", "Calificada", 25], ["propuesta", "Propuesta / cotización", 50], ["negociacion", "Negociación", 75]];
+  const ETAPA = Object.fromEntries(ETAPAS.map(([k, n, p]) => [k, { n, p }]));
+  const ORIGENES = ["Outbound", "Inbound", "Marca o fabricante", "Referido", "Expo o evento", "Sitio web o redes", "Reporte de campaña"];
+  const UNIDADES = ["pz", "juego", "kit", "m", "servicio"];
   const MET = Object.fromEntries(METRICAS.map((m) => [m[0], { n: m[1], u: m[2], fecha: m[3] }]));
   const ESTADO_OP = { abierta: ["Abierta", "na"], ganada: ["Ganada", "ok"], perdida: ["Perdida", "bad"] };
   const ESTADO_C = { planeada: "Planeada", activa: "Activa", pausada: "Pausada", terminada: "Terminada" };
-  const valMet = (k, v) => (MET[k] && MET[k].u === "$" ? fmtM(v) : fin(v) ? Math.round(v).toLocaleString("es-MX") : "—");
+  const nuevoId = () => (crypto.randomUUID ? crypto.randomUUID() : uid());
+  const numC = (x) => { if (x === null || x === undefined || x === "") return null; if (typeof x === "number") return isFinite(x) ? x : null; const n = +String(x).replace(/[$,\s]|usd|mxn/gi, ""); return String(x).trim() && isFinite(n) ? n : null; };
+  const r2c = (v) => Math.round(v * 100) / 100;
+  // Moneda de la campaña (MXN por omisión; USD con su paridad)
+  const ajustes = (c) => (c && c.ajustes) || {};
+  const enUSD = (c) => ajustes(c).moneda === "USD";
+  const paridadDe = (c) => (+ajustes(c).paridad > 0 ? +ajustes(c).paridad : 17.5);
+  const aMXN = (c) => (enUSD(c) ? paridadDe(c) : 1);
+  const dinC = (c, v) => { if (!fin(v)) return "—"; const p = enUSD(c) ? "US$" : "$", a = Math.abs(v), s = v < 0 ? "−" : ""; return a >= 1e6 ? `${s}${p}${(a / 1e6).toFixed(2)} M` : `${s}${p}${Math.round(a).toLocaleString("es-MX")}`; };
+  const valMet = (k, v, c) => (MET[k] && MET[k].u === "$" ? dinC(c, v) : !fin(v) ? "—" : Math.round(v).toLocaleString("es-MX") + (MET[k] && MET[k].u === "pz" ? " pz" : ""));
+  const piezas = (o) => (o.partidas && o.partidas.length ? o.partidas.reduce((s, p) => s + (+p.cantidad || 0), 0) : +o.cantidad || 0);
+  // Piezas vendidas: las facturadas si se conocen; si no, las de la oportunidad
+  const pzVenta = (o) => (o.venta && o.venta.length ? o.venta.reduce((s, p) => s + (+p.cantidad || 0), 0) : piezas(o));
+  // Venta registrada desde un reporte sin cotización: no suma a lo cotizado
+  const soloVenta = (o) => !!(o.venta && o.venta.length && !(o.partidas && o.partidas.length) && !o.cotizacion);
+  const claveProd = (p) => String(p.numero_parte || p.modelo || "").trim().toUpperCase();
+  const partidasDe = (o) => (o.partidas && o.partidas.length ? o.partidas : o.venta && o.venta.length ? o.venta : o.modelo ? [{ modelo: o.modelo, numero_parte: o.numero_parte || "", marca: o.marca || "", linea: o.linea || "", cantidad: +o.cantidad || 0, importe: +o.monto || 0 }] : []);
+  const resumenProd = (o) => { const L = partidasDe(o).map((p) => p.modelo || p.numero_parte).filter(Boolean); return L.length ? (L.length > 2 ? L.slice(0, 2).join(", ") + ` +${L.length - 2}` : L.join(", ")) : "—"; };
+  const importePartida = (p) => r2c((+p.cantidad || 0) * (+p.precio || 0) * (1 - (+p.descuento || 0) / 100));
   const diasEntre = (a, b) => (new Date(b + "T12:00:00") - new Date(a + "T12:00:00")) / 864e5;
   const hoyIso = () => isoLocal(new Date());
   const campanasLista = () => Object.values(G.campanas || {}).sort((a, b) => (b.inicio || "").localeCompare(a.inicio || "") || (a.nombre || "").localeCompare(b.nombre || ""));
   const opsDe = (cid) => Object.values(G.oport || {}).filter((o) => o.campana_id === cid);
   const marcasPortafolio = () => [...new Set([...IDX.h.values()].filter((r) => r.d === "linea").map((r) => r.n))].filter((n) => !/anticipo|descontinu|servicio/i.test(n)).sort();
+  function fechaCelda(v) {
+    if (v === null || v === undefined || v === "") return "";
+    if (v instanceof Date) return isNaN(v) ? "" : isoLocal(v);
+    if (typeof v === "number" && v > 20000 && v < 80000) return isoLocal(new Date(Math.round((v - 25569) * 864e5) + new Date().getTimezoneOffset() * 6e4));
+    return fechaPegada(String(v).trim().slice(0, 10)) || fechaPegada(String(v).trim());
+  }
+  function fechaPegada(s) {
+    s = String(s || "").trim(); if (!s) return "";
+    let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+    m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/); if (m) { let a = +m[3]; if (a < 100) a += 2000; return `${a}-${pad(+m[2])}-${pad(+m[1])}`; }
+    return "";
+  }
+  const carteraDeTexto = (s) => { const m = String(s || "").trim().match(/^C\s?(\d{1,2})\b/i); return m ? "C" + pad(+m[1]) : ""; };
+  // Catálogo: productos de la campaña + productos facturados (reporte de facturas de Odoo)
+  let CATP = null;
+  function catalogo() {
+    const src = BASE && BASE.productos; if (!src) return [];
+    if (CATP && CATP.src === src) return CATP.L;
+    const L = src.map((x) => ({ numero_parte: x[0], modelo: x[1], descripcion: x[2], marca: x[3], linea: x[4], precio: x[5], n: x[6] || 0 })).sort((a, b) => b.n - a.n);
+    CATP = { src, L }; return L;
+  }
+  function buscarCatalogo(q, c, n = 10) {
+    const pal = ISELParser.norm(q).split(" ").filter(Boolean); if (!pal.length || pal.join("").length < 2) return [];
+    const res = [], vistos = new Set();
+    const conv = (p) => (p.precio != null && enUSD(c) ? r2c(p.precio / paridadDe(c)) : p.precio);
+    const L = [...((c && c.productos) || []).map((p) => ({ ...p, fuente: "Campaña" })), ...catalogo().map((p) => ({ ...p, precio: conv(p), fuente: "Catálogo" }))];
+    for (const p of L) {
+      const k = claveProd(p); if (vistos.has(k)) continue;
+      const t = ISELParser.norm(`${p.numero_parte} ${p.modelo} ${p.descripcion} ${p.marca} ${p.linea}`);
+      if (pal.every((w) => t.includes(w))) { vistos.add(k); res.push(p); if (res.length >= n) break; }
+    }
+    return res;
+  }
+  function clientesConocidos() {
+    const s = new Set(Object.values(G.oport || {}).map((o) => o.cliente).filter(Boolean));
+    const F = BASE && BASE.facturas ? facturasInfo() : null; if (F) for (const d of F.docs) if (d.cli) s.add(d.cli);
+    return [...s].sort();
+  }
 
   // Filtro de fechas: toda la campaña o el periodo de la barra superior
   function filtroFechas() {
@@ -1689,15 +1754,18 @@
     const L = periodoMeses(); const set = new Set(L.map(([a, m]) => `${a}-${pad(m)}`));
     return (f) => !f || set.has(String(f).slice(0, 7));
   }
-  function calcular(ops, enP = () => true) {
-    const r = { oport: 0, cotizado: 0, abiertas: 0, abierto: 0, ganadas: 0, ganado: 0, perdidas: 0, perdido: 0, facturado: 0, clientes: 0, clientes_g: 0, ciclo: [], sinMotivo: 0 };
+  // f: factor de conversión de moneda (número o función por oportunidad)
+  function calcular(ops, enP = () => true, f = 1) {
+    const r = { oport: 0, cotizado: 0, abiertas: 0, abierto: 0, ganadas: 0, ganado: 0, perdidas: 0, perdido: 0, facturado: 0, clientes: 0, clientes_g: 0, ciclo: [], sinMotivo: 0, pz_cot: 0, pz_gan: 0, pz_per: 0, pz_abi: 0, ponderado: 0 };
     const cl = new Set(), clg = new Set();
     for (const o of ops) {
-      const m = +o.monto || 0;
-      if (enP(o.fecha_alta)) { r.oport++; r.cotizado += m; cl.add(o.cliente); if (o.estado === "abierta") { r.abiertas++; r.abierto += m; } }
-      if (o.estado === "ganada" && enP(o.fecha_cierre || o.fecha_alta)) { r.ganadas++; r.ganado += m; clg.add(o.cliente); if (o.fecha_alta && o.fecha_cierre) r.ciclo.push(diasEntre(o.fecha_alta, o.fecha_cierre)); }
-      if (o.estado === "perdida" && enP(o.fecha_cierre || o.fecha_alta)) { r.perdidas++; r.perdido += m; if (!o.motivo) r.sinMotivo++; }
-      if (o.fecha_factura && enP(o.fecha_factura)) r.facturado += +o.monto_facturado || (o.estado === "ganada" ? m : 0);
+      const fo = typeof f === "function" ? f(o) : f;
+      const m = (+o.monto || 0) * fo;
+      const pz = piezas(o);
+      if (enP(o.fecha_alta)) { r.oport++; if (!soloVenta(o)) { r.cotizado += m; r.pz_cot += pz; } cl.add(o.cliente); if (o.estado === "abierta") { r.abiertas++; r.abierto += m; r.pz_abi += pz; r.ponderado += m * (fin(o.probabilidad) ? o.probabilidad / 100 : 0.3); } }
+      if (o.estado === "ganada" && enP(o.fecha_cierre || o.fecha_alta)) { r.ganadas++; r.ganado += m; r.pz_gan += pzVenta(o); clg.add(o.cliente); if (o.fecha_alta && o.fecha_cierre) r.ciclo.push(diasEntre(o.fecha_alta, o.fecha_cierre)); }
+      if (o.estado === "perdida" && enP(o.fecha_cierre || o.fecha_alta)) { r.perdidas++; r.perdido += m; r.pz_per += pz; if (!o.motivo) r.sinMotivo++; }
+      if (o.fecha_factura && enP(o.fecha_factura)) r.facturado += (+o.monto_facturado || (o.estado === "ganada" ? +o.monto || 0 : 0)) * fo;
     }
     r.clientes = cl.size; r.clientes_g = clg.size;
     r.tasa = div(r.ganadas, r.ganadas + r.perdidas); r.tasa$ = div(r.ganado, r.ganado + r.perdido);
@@ -1709,7 +1777,7 @@
     const tot = Math.max(1, diasEntre(c.inicio, c.fin)); const t = diasEntre(c.inicio, hoyIso());
     return Math.max(0, Math.min(1, t / tot));
   }
-  function principal(c) { const m = c.metas || {}; const k = m.principal && fin(+m[m.principal]) && +m[m.principal] > 0 ? m.principal : METRICAS.map((x) => x[0]).find((x) => +m[x] > 0); return k || "ganado"; }
+  function principal(c) { const m = c.metas || {}; const k = m.principal && fin(+m[m.principal]) && +m[m.principal] > 0 ? m.principal : METRICAS.map((x) => x[0]).find((x) => +m[x] > 0); return k || m.principal || "ganado"; }
   function avanceCampana(c, ops, enP) {
     const R = calcular(ops, enP); const k = principal(c); const meta = +((c.metas || {})[k]) || null;
     const av = div(R[k], meta); const t = tiempoCampana(c);
@@ -1718,6 +1786,7 @@
   }
   const semRitmo = (x) => (!fin(x) ? "na" : x >= 1 ? "ok" : x >= 0.8 ? "warn" : "bad");
   const opcCarteras = () => Object.entries(IDX.cartNom).sort().map(([k, n]) => ({ v: k, t: `${k} ${n}` }));
+  const botonReporte = () => (esAdmin() ? `<label class="btn chico solo-admin" for="camp-archivo" title="Excel con cotizaciones y ventas de la campaña">⇪ Cargar reporte de campaña</label><input type="file" id="camp-archivo" accept=".xlsx,.xlsm,.xls" hidden>` : "");
 
   function campSeccion(id, num, titulo, pregunta, cuerpo) {
     return `<section class="bloque" id="b-${id}"><header><span class="bloque-num">${num}</span><h2>${titulo}</h2><span class="pregunta">${pregunta}</span><div class="acciones-h">${botonAmpliar(id)}</div></header><div class="bloque-cuerpo">${cuerpo}</div></section>`;
@@ -1742,41 +1811,48 @@
   function cResumen() {
     const { cs, opsF, marcas } = campFiltradas(); const enP = filtroFechas(); const C = colores();
     if (!campanasLista().length) return campSeccion("c-resumen", "C1", "Campañas", "Avance de las campañas e iniciativas de venta",
-      `<div class="vacio">Todavía no hay campañas. ${esAdmin() ? `<button class="btn prim" type="button" data-camp-nueva>+ Nueva campaña</button>` : "El administrador las dará de alta."}</div>`);
+      `<div class="vacio">Todavía no hay campañas. ${esAdmin() ? `<button class="btn prim" type="button" data-camp-nueva>+ Nueva campaña</button> ${botonReporte()}` : "El administrador las dará de alta."}</div>`);
     const filas = cs.map((c) => ({ c, ...avanceCampana(c, opsF(c), enP) }));
-    const T = calcular(cs.flatMap(opsF), enP);
+    const T = calcular(cs.flatMap(opsF), enP, (o) => aMXN(G.campanas[o.campana_id]));
+    const hayUSD = cs.some(enUSD);
     const activas = cs.filter((c) => c.estado === "activa").length;
     const vis = filas.filter((f) => f.meta);
     chart("g-camp-av", { type: "bar", data: { labels: vis.map((f) => f.c.nombre.length > 28 ? f.c.nombre.slice(0, 27) + "…" : f.c.nombre), datasets: [{ label: "Avance del objetivo", data: vis.map((f) => f.av), backgroundColor: vis.map((f) => C[semRitmo(f.ritmo)] || C.s1) }, { label: "Tiempo transcurrido", data: vis.map((f) => f.t), backgroundColor: C.meta }] },
-      options: { indexAxis: "y", plugins: { tooltip: { callbacks: { label: (x) => `${x.dataset.label}: ${fmtP(x.parsed.x)}`, afterBody: (it) => { const f = vis[it[0].dataIndex]; return `${MET[f.k].n}: ${valMet(f.k, f.R[f.k])} de ${valMet(f.k, f.meta)}`; } } } }, scales: { x: ejeP({ beginAtZero: true, suggestedMax: 1 }), y: { grid: { display: false } } } } });
-    const tabla = `<div class="tabla-wrap"><table class="t"><thead><tr><th>Campaña</th><th>Tipo</th><th>Estado</th><th>Marca</th><th>Fechas</th><th class="n">Objetivo</th><th class="n">Avance</th><th class="n">Tiempo</th><th class="n">Abiertas</th><th class="n">Ganadas</th><th class="n">Perdidas</th><th class="n">Tasa de cierre</th><th class="n">Ganado</th></tr></thead><tbody>
-      ${filas.map((f) => `<tr class="fila-click" data-camp-ver="${f.c.id}" tabindex="0"><td class="nombre"><b>${esc(f.c.nombre)}</b><div class="cod" style="margin:0">${f.c.carteras.length} carteras</div></td><td><span class="sem na">${f.c.tipo === "inbound" ? "Inbound" : "Outbound"}</span></td><td>${ESTADO_C[f.c.estado] || f.c.estado}</td><td>${esc(f.c.marca || "—")}</td><td class="mono" style="white-space:nowrap">${esc(f.c.inicio || "—")} → ${esc(f.c.fin || "—")}</td>
-        <td class="n">${f.meta ? `${valMet(f.k, f.meta)}<div class="cod" style="margin:0">${MET[f.k].n}</div>` : "—"}</td><td class="n">${f.meta ? sem(f.ritmo === null ? f.av : f.ritmo >= 1 ? 1 : f.ritmo >= 0.8 ? 0.85 : 0.5, fmtP(f.av)) : "—"}</td><td class="n">${fmtP(f.t)}</td>
-        <td class="n">${f.R.abiertas}</td><td class="n pos">${f.R.ganadas}</td><td class="n neg">${f.R.perdidas}</td><td class="n">${fmtP(f.R.tasa)}</td><td class="n">${fmt$(f.R.ganado)}</td></tr>`).join("") || `<tr><td colspan="13">Ninguna campaña con estos filtros.</td></tr>`}</tbody></table></div>`;
+      options: { indexAxis: "y", plugins: { tooltip: { callbacks: { label: (x) => `${x.dataset.label}: ${fmtP(x.parsed.x)}`, afterBody: (it) => { const f = vis[it[0].dataIndex]; return `${MET[f.k].n}: ${valMet(f.k, f.R[f.k], f.c)} de ${valMet(f.k, f.meta, f.c)}`; } } } }, scales: { x: ejeP({ beginAtZero: true, suggestedMax: 1 }), y: { grid: { display: false } } } } });
+    const tabla = `<div class="tabla-wrap"><table class="t"><thead><tr><th>Campaña</th><th>Tipo</th><th>Estado</th><th>Marca</th><th>Fechas</th><th class="n">Objetivo</th><th class="n">Avance</th><th class="n">Tiempo</th><th class="n">Abiertas</th><th class="n">Ganadas</th><th class="n">Perdidas</th><th class="n">Tasa de cierre</th><th class="n">Piezas vendidas</th><th class="n">Ganado</th></tr></thead><tbody>
+      ${filas.map((f) => `<tr class="fila-click" data-camp-ver="${f.c.id}" tabindex="0"><td class="nombre"><b>${esc(f.c.nombre)}</b><div class="cod" style="margin:0">${f.c.carteras.length} carteras${enUSD(f.c) ? " · USD" : ""}</div></td><td><span class="sem na">${f.c.tipo === "inbound" ? "Inbound" : "Outbound"}</span></td><td>${ESTADO_C[f.c.estado] || f.c.estado}</td><td>${esc(f.c.marca || "—")}</td><td class="mono" style="white-space:nowrap">${esc(f.c.inicio || "—")} → ${esc(f.c.fin || "—")}</td>
+        <td class="n">${f.meta ? `${valMet(f.k, f.meta, f.c)}<div class="cod" style="margin:0">${MET[f.k].n}</div>` : "—"}</td><td class="n">${f.meta ? sem(f.ritmo === null ? f.av : f.ritmo >= 1 ? 1 : f.ritmo >= 0.8 ? 0.85 : 0.5, fmtP(f.av)) : "—"}</td><td class="n">${fmtP(f.t)}</td>
+        <td class="n">${f.R.abiertas}</td><td class="n pos">${f.R.ganadas}</td><td class="n neg">${f.R.perdidas}</td><td class="n">${fmtP(f.R.tasa)}</td><td class="n">${f.R.pz_gan ? f.R.pz_gan.toLocaleString("es-MX") : "—"}</td><td class="n">${dinC(f.c, f.R.ganado)}</td></tr>`).join("") || `<tr><td colspan="14">Ninguna campaña con estos filtros.</td></tr>`}</tbody></table></div>`;
     return campSeccion("c-resumen", "C1", "Campañas", "¿Cómo avanzan las campañas contra su objetivo?",
-      `<div class="sub" style="margin:0;flex-wrap:wrap;gap:8px">${filtrosCamp(marcas)} <span class="der">${esAdmin() ? `<button class="btn prim chico" type="button" data-camp-nueva>+ Nueva campaña</button>` : ""}</span></div>
+      `<div class="sub" style="margin:0;flex-wrap:wrap;gap:8px">${filtrosCamp(marcas)} <span class="der" style="display:flex;gap:8px;flex-wrap:wrap">${esAdmin() ? `${botonReporte()}<button class="btn prim chico" type="button" data-camp-nueva>+ Nueva campaña</button>` : ""}</span></div>
       <div class="tira"><div class="celda"><label>Campañas activas</label><div class="valor">${activas}</div><small>${cs.length} con estos filtros</small></div>
-        <div class="celda"><label>Oportunidades</label><div class="valor">${T.oport}</div><small>${fmtM(T.cotizado)} cotizados · ${T.abiertas} abiertas</small></div>
-        <div class="celda"><label>Ganado</label><div class="valor pos">${fmtM(T.ganado)}</div><small>${T.ganadas} oportunidades · ticket ${fmtM(T.ticket)}</small></div>
+        <div class="celda"><label>Oportunidades</label><div class="valor">${T.oport}</div><small>${fmtM(T.cotizado)} cotizados · ${T.pz_cot.toLocaleString("es-MX")} pz · ${T.abiertas} abiertas</small></div>
+        <div class="celda"><label>Ganado</label><div class="valor pos">${fmtM(T.ganado)}</div><small>${T.ganadas} oportunidades · ${T.pz_gan.toLocaleString("es-MX")} pz</small></div>
         <div class="celda"><label>Tasa de cierre</label><div class="valor">${fmtP(T.tasa)}</div><small>${T.perdidas} perdidas por ${fmtM(T.perdido)}</small></div></div>
+      ${hayUSD ? `<p class="nota-pie">Los totales están en pesos; las campañas en dólares se convierten con la paridad de cada campaña. La tabla muestra cada campaña en su moneda.</p>` : ""}
       ${vis.length ? `<div><div class="sub">Avance del objetivo contra tiempo transcurrido</div><div class="graf" style="height:${Math.min(520, Math.max(200, vis.length * 44 + 60))}px"><canvas id="g-camp-av" role="img" aria-label="Avance de cada campaña"></canvas></div><p class="nota-pie">Si el avance (color) va por detrás del tiempo transcurrido (gris), la campaña no llegará a su objetivo al ritmo actual. Verde: a tiempo · ámbar: 80–99% del ritmo · rojo: menos de 80%.</p></div>` : ""}
       ${tabla}<p class="nota-pie">Haz clic en una campaña para ver su detalle.</p>`);
   }
 
   /* ---------------------------------------------------- C2 Detalle */
+  function metaCartera(c, kc, k, metaTot) {
+    const A = ajustes(c); const mc = A.metasCartera || {};
+    if (Object.keys(mc).length) return (A.metaCartMetrica || k) === k && fin(+mc[kc]) ? +mc[kc] : null;
+    return metaTot && c.carteras.length ? metaTot / c.carteras.length : null;
+  }
   function cDetalle() {
     const L = campanasLista();
     if (UI.campEdit) return campSeccion("c-detalle", "C2", UI.campEdit === "nueva" ? "Nueva campaña" : "Editar campaña", "Datos de la campaña", editorCampana());
     if (!L.length) return "";
     const c = G.campanas[UI.campSel] || L[0]; UI.campSel = c.id;
-    const enP = filtroFechas(); const C = colores();
+    const enP = filtroFechas(); const C = colores(); const Aj = ajustes(c);
     registrarMs("cd-cart", c.carteras.map((k) => ({ v: k, t: nombreCartera(k) })).concat([{ v: "S/C", t: "Sin cartera" }]));
     const todas = opsDe(c.id); const ops = todas.filter((o) => pasa("cd-cart", o.cartera || "S/C"));
     const A = avanceCampana(c, ops, enP); const R = A.R; const metas = c.metas || {};
     // Avance acumulado en el tiempo
     const k = A.k, fk = MET[k].fecha;
     const fechaDe = (o) => (fk === "alta" ? o.fecha_alta : fk === "factura" ? o.fecha_factura : o.estado === "ganada" ? o.fecha_cierre || o.fecha_alta : null);
-    const valorDe = (o) => (k === "facturado" ? +o.monto_facturado || (o.estado === "ganada" ? +o.monto || 0 : 0) : k === "ganado" || k === "cotizado" ? +o.monto || 0 : 1);
+    const valorDe = (o) => (k === "facturado" ? +o.monto_facturado || (o.estado === "ganada" ? +o.monto || 0 : 0) : k === "ganado" || k === "cotizado" ? +o.monto || 0 : k === "pz_cot" ? (soloVenta(o) ? 0 : piezas(o)) : k === "pz_gan" ? pzVenta(o) : 1);
     let graf = "";
     if (c.inicio && c.fin) {
       const pasos = []; const ini = new Date(c.inicio + "T12:00:00"), finD = new Date(c.fin + "T12:00:00");
@@ -1786,48 +1862,72 @@
       const real = pasos.map((p) => {
         if (p > hoyS && pasos[0] <= hoyS && pasos.findIndex((x) => x > hoyS) !== pasos.indexOf(p)) return null;
         let acc = 0; vistos.clear();
-        for (const o of ops) { const f = fechaDe(o); if (!f || f > p) continue; if (k === "clientes" || k === "clientes_g") { if (!vistos.has(o.cliente)) { vistos.add(o.cliente); acc++; } } else if (!(k === "ganadas" && o.estado !== "ganada")) acc += valorDe(o); }
+        for (const o of ops) { const f = fechaDe(o); if (!f || f > p) continue; if (k === "clientes" || k === "clientes_g") { if (!vistos.has(o.cliente)) { vistos.add(o.cliente); acc++; } } else if (!((k === "ganadas" || k === "pz_gan") && o.estado !== "ganada")) acc += valorDe(o); }
         return p > hoyS ? null : acc;
       });
       const ideal = A.meta ? pasos.map((p) => A.meta * Math.max(0, Math.min(1, diasEntre(c.inicio, p) / Math.max(1, diasEntre(c.inicio, c.fin))))) : null;
       chart("g-camp-t", { type: "line", data: { labels: pasos.map((p) => `${+p.slice(8)} ${MC[+p.slice(5, 7) - 1]}`), datasets: [
-        { label: `${MET[k].n} acumulado`, data: real, borderColor: C.s1, backgroundColor: alfa(C.s1, 0.12), fill: "origin", tend: MET[k].u === "$" ? "M" : "n", tendMin: 0, tendPaso: "sem", tendHasta: pasos.length - 1, tendNombre: "Proyección por tendencia" },
+        { label: `${MET[k].n} acumulado`, data: real, borderColor: C.s1, backgroundColor: alfa(C.s1, 0.12), fill: "origin", tend: MET[k].u === "$" && !enUSD(c) ? "M" : MET[k].u === "pz" ? "pz" : "n", tendMin: 0, tendPaso: "sem", tendHasta: pasos.length - 1, tendNombre: "Proyección por tendencia" },
         ...(ideal ? [{ label: "Ritmo necesario para la meta", data: ideal, borderColor: C.meta, borderDash: [4, 4], pointRadius: 0 }] : []) ] },
-        options: { scales: { y: MET[k].u === "$" ? ejeM({ beginAtZero: true }) : { beginAtZero: true, grid: { color: C.grid } }, x: { grid: { display: false }, ticks: { maxTicksLimit: 12, maxRotation: 0 } } }, plugins: { tooltip: { callbacks: { label: (x) => `${x.dataset.label}: ${valMet(k, x.parsed.y)}` } } } } });
+        options: { scales: { y: MET[k].u === "$" && !enUSD(c) ? ejeM({ beginAtZero: true }) : { beginAtZero: true, grid: { color: C.grid } }, x: { grid: { display: false }, ticks: { maxTicksLimit: 12, maxRotation: 0 } } }, plugins: { tooltip: { callbacks: { label: (x) => `${x.dataset.label}: ${valMet(k, x.parsed.y, c)}` } } } } });
       graf = `<div><div class="sub">Avance de ${MET[k].n.toLowerCase()} en el tiempo</div><div class="graf"><canvas id="g-camp-t" role="img" aria-label="Avance acumulado de la campaña"></canvas></div><p class="nota-pie">La línea de tendencia se extiende hasta el cierre de la campaña: es la proyección si se mantiene el ritmo actual.</p></div>`;
     }
     // Por cartera
     const porCart = c.carteras.concat(ops.some((o) => !o.cartera || !c.carteras.includes(o.cartera)) ? ["S/C"] : []).filter((x) => pasa("cd-cart", x));
     const RC = porCart.map((kc) => ({ k: kc, R: calcular(ops.filter((o) => (o.cartera && c.carteras.includes(o.cartera) ? o.cartera : "S/C") === kc), enP) }));
     const modoC = vista("cd-modo", "monto");
-    const v$ = (R, campo) => (modoC === "monto" ? R[{ abiertas: "abierto", ganadas: "ganado", perdidas: "perdido" }[campo]] : R[campo]);
+    const v$ = (R2, campo) => (modoC === "monto" ? R2[{ abiertas: "abierto", ganadas: "ganado", perdidas: "perdido" }[campo]] : modoC === "pz" ? R2[{ abiertas: "pz_abi", ganadas: "pz_gan", perdidas: "pz_per" }[campo]] : R2[campo]);
     chart("g-camp-cart", { type: "bar", data: { labels: RC.map((x) => x.k === "S/C" ? "Sin cartera" : x.k), datasets: [["ganadas", "Ganadas", C.ok], ["abiertas", "Abiertas", C.s1], ["perdidas", "Perdidas", C.bad]].map(([cmp, lab, col]) => ({ label: lab, data: RC.map((x) => v$(x.R, cmp)), backgroundColor: col })) },
-      options: { scales: { x: { stacked: true, grid: { display: false } }, y: modoC === "monto" ? ejeM({ stacked: true, beginAtZero: true }) : { stacked: true, beginAtZero: true, grid: { color: C.grid } } }, plugins: { tooltip: { callbacks: { title: (it) => nombreCartera(RC[it[0].dataIndex].k), label: (x) => `${x.dataset.label}: ${modoC === "monto" ? fmt$(x.parsed.y) : x.parsed.y}` } } } } });
-    const metaCart = A.meta && c.carteras.length ? A.meta / c.carteras.length : null;
-    const tablaCart = `<div class="tabla-wrap" style="max-height:none"><table class="t"><thead><tr><th>Cartera</th><th class="n">Oportunidades</th><th class="n">Cotizado</th><th class="n">Ganadas</th><th class="n">Ganado</th><th class="n">Perdidas</th><th class="n">Tasa</th>${metaCart ? `<th class="n">Avance (${MET[k].n.toLowerCase()})</th>` : ""}</tr></thead><tbody>
-      ${RC.map((x) => `<tr><td class="nombre">${esc(nombreCartera(x.k))}</td><td class="n">${x.R.oport}</td><td class="n">${fmt$(x.R.cotizado)}</td><td class="n pos">${x.R.ganadas}</td><td class="n">${fmt$(x.R.ganado)}</td><td class="n neg">${x.R.perdidas}</td><td class="n">${fmtP(x.R.tasa)}</td>${metaCart ? `<td class="n">${x.k === "S/C" ? "—" : sem(div(x.R[k], metaCart), `${valMet(k, x.R[k])} · ${fmtP(div(x.R[k], metaCart))}`)}</td>` : ""}</tr>`).join("")}</tbody></table></div>
-      ${metaCart ? `<p class="nota-pie">Meta por cartera: ${valMet(k, metaCart)} (objetivo repartido en partes iguales entre ${c.carteras.length} carteras).</p>` : ""}`;
-    // Productos
-    const prods = {}; for (const o of ops) { const p = [o.marca, o.modelo].filter(Boolean).join(" · ") || "(sin modelo)"; const x = (prods[p] = prods[p] || { n: 0, cot: 0, gan: 0, per: 0 }); x.n++; x.cot += +o.monto || 0; if (o.estado === "ganada") x.gan += +o.monto || 0; if (o.estado === "perdida") x.per += +o.monto || 0; }
-    const PR = Object.entries(prods).sort((a, b) => b[1].cot - a[1].cot).slice(0, 12);
-    // Tiles de metas
-    const tiles = METRICAS.filter(([m]) => +metas[m] > 0).map(([m, n]) => { const v = R[m], meta = +metas[m]; const av = div(v, meta); return `<div class="celda ${m === k ? "principal" : ""}"><label>${n}${m === k ? " · principal" : ""}</label><div class="valor">${valMet(m, v)}</div><small>meta ${valMet(m, meta)} · ${fmtP(av)}</small><div class="barra-avance" style="color:var(--${semClase(av) === "na" ? "muted" : semClase(av)})"><i style="width:${Math.min(100, (av || 0) * 100)}%"></i></div></div>`; }).join("");
+      options: { scales: { x: { stacked: true, grid: { display: false } }, y: modoC === "monto" && !enUSD(c) ? ejeM({ stacked: true, beginAtZero: true }) : { stacked: true, beginAtZero: true, grid: { color: C.grid } } }, plugins: { tooltip: { callbacks: { title: (it) => nombreCartera(RC[it[0].dataIndex].k), label: (x) => `${x.dataset.label}: ${modoC === "monto" ? dinC(c, x.parsed.y) : modoC === "pz" ? x.parsed.y + " pz" : x.parsed.y}` } } } } });
+    const hayMC = RC.some((x) => x.k !== "S/C" && fin(metaCartera(c, x.k, k, A.meta)));
+    const mcPropia = Object.keys(Aj.metasCartera || {}).length > 0;
+    const tablaCart = `<div class="tabla-wrap" style="max-height:none"><table class="t"><thead><tr><th>Cartera</th><th class="n">Oportunidades</th><th class="n">Pz cotizadas</th><th class="n">Cotizado</th><th class="n">Ganadas</th><th class="n">Pz vendidas</th><th class="n">Ganado</th><th class="n">Perdidas</th><th class="n">Tasa</th>${hayMC ? `<th class="n">Meta (${MET[k].n.toLowerCase()})</th><th class="n">Avance</th>` : ""}</tr></thead><tbody>
+      ${RC.map((x) => { const mt = x.k === "S/C" ? null : metaCartera(c, x.k, k, A.meta); return `<tr><td class="nombre">${esc(nombreCartera(x.k))}</td><td class="n">${x.R.oport}</td><td class="n">${x.R.pz_cot || "—"}</td><td class="n">${dinC(c, x.R.cotizado)}</td><td class="n pos">${x.R.ganadas}</td><td class="n">${x.R.pz_gan || "—"}</td><td class="n">${dinC(c, x.R.ganado)}</td><td class="n neg">${x.R.perdidas}</td><td class="n">${fmtP(x.R.tasa)}</td>${hayMC ? `<td class="n">${fin(mt) ? valMet(k, mt, c) : "—"}</td><td class="n">${fin(mt) && mt > 0 ? sem(div(x.R[k], mt), fmtP(div(x.R[k], mt))) : "—"}</td>` : ""}</tr>`; }).join("")}</tbody></table></div>
+      ${hayMC ? `<p class="nota-pie">${mcPropia ? "Meta por cartera definida en la campaña" + (Aj.reporte && Aj.reporte.archivo ? " o tomada del reporte" : "") + "." : `Meta por cartera: objetivo repartido en partes iguales entre ${c.carteras.length} carteras.`}</p>` : ""}`;
+    // Productos: de las partidas de cada oportunidad y del catálogo de la campaña
+    const prods = new Map();
+    const fila = (p) => { const kk = claveProd(p) || "(SIN MODELO)"; if (!prods.has(kk)) prods.set(kk, { p, n: 0, pzc: 0, cot: 0, pzg: 0, gan: 0, pzp: 0, per: 0 }); return prods.get(kk); };
+    for (const p of c.productos || []) fila(p);
+    for (const o of ops) {
+      const gan = o.estado === "ganada" && enP(o.fecha_cierre || o.fecha_alta);
+      if (!soloVenta(o)) for (const p of partidasDe(o)) {
+        const x = fila(p); const imp = +p.importe || importePartida(p); const q = +p.cantidad || 0;
+        if (enP(o.fecha_alta)) { x.n++; x.pzc += q; x.cot += imp; }
+        if (gan && !(o.venta && o.venta.length)) { x.pzg += q; x.gan += imp; }
+        if (o.estado === "perdida" && enP(o.fecha_cierre || o.fecha_alta)) { x.pzp += q; x.per += imp; }
+      }
+      if (gan && o.venta && o.venta.length) for (const p of o.venta) { const x = fila(p); if (soloVenta(o)) x.n++; x.pzg += +p.cantidad || 0; x.gan += +p.importe || 0; }
+    }
+    const PR = [...prods.values()].sort((a, b) => b.pzc - a.pzc || b.cot - a.cot);
+    const tablaProd = PR.length ? `<div><div class="sub">Productos de la campaña ${esAdmin() ? `<span class="der"><button class="btn chico" type="button" data-camp-prod="${c.id}">+ Agregar producto</button></span>` : ""}</div><div class="tabla-wrap"><table class="t"><thead><tr><th>Modelo</th><th>Número de parte</th><th>Marca · línea</th><th class="n">Precio lista</th><th class="n">Oportunidades</th><th class="n">Pz cotizadas</th><th class="n">Cotizado</th><th class="n">Precio prom. cotizado</th><th class="n">Pz vendidas</th><th class="n">Ganado</th><th class="n">Pz perdidas</th></tr></thead><tbody>
+      ${PR.map((x) => `<tr><td class="nombre"><b>${esc(x.p.modelo || "—")}</b>${x.p.descripcion ? `<div class="cod" style="margin:0">${esc(x.p.descripcion.slice(0, 60))}</div>` : ""}</td><td class="mono">${esc(x.p.numero_parte || "—")}</td><td>${esc([x.p.marca, x.p.linea].filter(Boolean).join(" · ") || "—")}</td><td class="n">${fin(+x.p.precio) && x.p.precio !== null ? dinC(c, +x.p.precio) : "—"}</td><td class="n">${x.n}</td><td class="n">${x.pzc || "—"}</td><td class="n">${dinC(c, x.cot)}</td><td class="n">${x.pzc ? dinC(c, x.cot / x.pzc) : "—"}</td><td class="n pos">${x.pzg || "—"}</td><td class="n">${dinC(c, x.gan)}</td><td class="n neg">${x.pzp || "—"}</td></tr>`).join("")}</tbody></table></div></div>`
+      : esAdmin() ? `<div class="sub">Productos de la campaña <span class="der"><button class="btn chico" type="button" data-camp-prod="${c.id}">+ Agregar producto</button></span></div>` : "";
+    // Tiles de metas e indicadores propios
+    const tiles = METRICAS.filter(([m]) => +metas[m] > 0).map(([m, n]) => { const v = R[m], meta = +metas[m]; const av = div(v, meta); return `<div class="celda ${m === k ? "principal" : ""}"><label>${n}${m === k ? " · principal" : ""}</label><div class="valor">${valMet(m, v, c)}</div><small>meta ${valMet(m, meta, c)} · ${fmtP(av)}</small><div class="barra-avance" style="color:var(--${semClase(av) === "na" ? "muted" : semClase(av)})"><i style="width:${Math.min(100, (av || 0) * 100)}%"></i></div></div>`; }).join("")
+      + (Aj.extra || []).filter((x) => x.n).map((x) => { const v = numC(x.v), meta = numC(x.meta); const av = fin(v) && meta ? v / meta : null; return `<div class="celda"><label>${esc(x.n)}</label><div class="valor">${fin(v) ? v.toLocaleString("es-MX") + (x.u ? " " + esc(x.u) : "") : "—"}</div><small>${meta ? `meta ${meta.toLocaleString("es-MX")}${x.u ? " " + esc(x.u) : ""} · ${fmtP(av)}` : "indicador propio"}</small>${meta ? `<div class="barra-avance" style="color:var(--${semClase(av) === "na" ? "muted" : semClase(av)})"><i style="width:${Math.min(100, (av || 0) * 100)}%"></i></div>` : ""}</div>`; }).join("");
     const proy = A.t && A.t > 0 && A.t < 1 && A.meta ? R[k] / A.t : null;
+    // Indicadores del reporte (inversión, precio de campaña)
+    const Rp = Aj.reporte || null;
+    const pzT = R.pz_cot; const precioProm = pzT ? R.cotizado / pzT : null;
+    const tilesRep = Rp && (Rp.inversion || Rp.precio) ? `<div class="tira tira-auto">${Rp.inversion ? `<div class="celda"><label>Inversión de la campaña</label><div class="valor">${dinC(c, Rp.inversion)}</div><small>${Rp.inversionNota ? esc(Rp.inversionNota) : "según el reporte"}</small></div><div class="celda"><label>Vendido / inversión</label><div class="valor ${R.ganado >= Rp.inversion ? "pos" : ""}">${(R.ganado / Rp.inversion).toFixed(2)}×</div><small>${dinC(c, R.ganado)} vendidos · facturado ${dinC(c, R.facturado)}</small></div>` : ""}
+      ${Rp.precio ? `<div class="celda"><label>Precio de campaña</label><div class="valor">${dinC(c, Rp.precio)}</div><small>por pieza${Rp.precioNota ? " · " + esc(Rp.precioNota) : ""}</small></div><div class="celda"><label>Precio promedio cotizado</label><div class="valor">${dinC(c, precioProm)}</div><small>${precioProm ? fmtPs(precioProm / Rp.precio - 1) + " contra el precio de campaña" : "sin piezas cotizadas"}</small></div>` : ""}</div>
+      <p class="nota-pie">Último reporte: ${esc(Rp.archivo || "—")}${Rp.fecha ? " · cargado el " + esc(Rp.fecha.slice(0, 10)) : ""}.</p>` : "";
     const encabezado = `<div class="camp-cab"><div><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><select class="campo" id="camp-sel" style="width:auto;font-weight:600" aria-label="Campaña">${L.map((x) => `<option value="${x.id}" ${x.id === c.id ? "selected" : ""}>${esc(x.nombre)}</option>`).join("")}</select>
-        <span class="sem na">${c.tipo === "inbound" ? "Inbound" : "Outbound"}</span><span class="sem ${c.estado === "activa" ? "ok" : c.estado === "terminada" ? "na" : "warn"}">${ESTADO_C[c.estado]}</span>
-        ${esAdmin() ? `<button class="btn chico" type="button" data-camp-editar="${c.id}">Editar campaña</button><button class="btn chico peligro" type="button" data-camp-borrar="${c.id}">${UI.borrar === "c" + c.id ? "Confirmar: eliminar campaña y sus oportunidades" : "Eliminar"}</button>` : ""}</div>
+        <span class="sem na">${c.tipo === "inbound" ? "Inbound" : "Outbound"}</span><span class="sem ${c.estado === "activa" ? "ok" : c.estado === "terminada" ? "na" : "warn"}">${ESTADO_C[c.estado]}</span>${enUSD(c) ? `<span class="sem na">USD · paridad ${paridadDe(c)}</span>` : ""}
+        ${esAdmin() ? `<button class="btn chico" type="button" data-camp-editar="${c.id}">Editar campaña</button>${botonReporte()}<button class="btn chico peligro" type="button" data-camp-borrar="${c.id}">${UI.borrar === "c" + c.id ? "Confirmar: eliminar campaña y sus oportunidades" : "Eliminar"}</button>` : ""}</div>
         <p style="margin:8px 0 0;max-width:90ch">${c.objetivo ? esc(c.objetivo) : '<span class="nota-pie">Sin descripción del objetivo.</span>'}</p>
-        <p class="nota-pie" style="margin:4px 0 0"><b>Marca:</b> ${esc(c.marca || "—")} · <b>Modelos:</b> ${esc(c.modelos || "—")} · <b>Fechas:</b> ${esc(c.inicio || "—")} a ${esc(c.fin || "—")} (${fmtP(A.t)} del tiempo transcurrido) · <b>Participan:</b> ${c.carteras.map((x) => esc(nombreCartera(x))).join(", ") || "—"}</p></div></div>`;
-    const ritmoTxt = A.meta ? `<div class="interpretacion"><p>${A.t === null ? "Define fechas de inicio y fin para medir el ritmo." : c.estado === "planeada" ? "La campaña todavía no inicia." : `Lleva <b>${fmtP(A.av)}</b> del objetivo (${valMet(k, R[k])} de ${valMet(k, A.meta)}) con <b>${fmtP(A.t)}</b> del tiempo transcurrido. ${proy !== null ? `Al ritmo actual cerraría en <b>${valMet(k, proy)}</b> (${fmtP(div(proy, A.meta))} de la meta)${proy < A.meta ? `; para llegar necesita ${valMet(k, (A.meta - R[k]))} en el tiempo que resta.` : "."}` : A.t >= 1 ? `La campaña terminó en ${fmtP(A.av)} de su objetivo.` : ""}`} ${R.perdidas ? `Se han perdido <b>${R.perdidas}</b> oportunidades por ${fmtM(R.perdido)}${R.sinMotivo ? `; <b>${R.sinMotivo}</b> no tienen motivo registrado` : ""}.` : ""}</p></div>` : "";
+        <p class="nota-pie" style="margin:4px 0 0"><b>Marca:</b> ${esc(c.marca || "—")} · <b>Modelos:</b> ${esc(c.modelos || (c.productos || []).map((p) => p.modelo).filter(Boolean).slice(0, 6).join(", ") || "—")} · <b>Fechas:</b> ${esc(c.inicio || "—")} a ${esc(c.fin || "—")} (${fmtP(A.t)} del tiempo transcurrido) · <b>Participan:</b> ${c.carteras.map((x) => esc(nombreCartera(x))).join(", ") || "—"}</p></div></div>`;
+    const ritmoTxt = A.meta ? `<div class="interpretacion"><p>${A.t === null ? "Define fechas de inicio y fin para medir el ritmo." : c.estado === "planeada" ? "La campaña todavía no inicia." : `Lleva <b>${fmtP(A.av)}</b> del objetivo (${valMet(k, R[k], c)} de ${valMet(k, A.meta, c)}) con <b>${fmtP(A.t)}</b> del tiempo transcurrido. ${proy !== null ? `Al ritmo actual cerraría en <b>${valMet(k, proy, c)}</b> (${fmtP(div(proy, A.meta))} de la meta)${proy < A.meta ? `; para llegar necesita ${valMet(k, (A.meta - R[k]), c)} en el tiempo que resta.` : "."}` : A.t >= 1 ? `La campaña terminó en ${fmtP(A.av)} de su objetivo.` : ""}`} ${R.pz_cot ? `Se han cotizado <b>${R.pz_cot.toLocaleString("es-MX")} pz</b> y vendido <b>${R.pz_gan.toLocaleString("es-MX")} pz</b> (${fmtP(div(R.pz_gan, R.pz_cot))} de conversión en piezas).` : ""} ${R.perdidas ? `Se han perdido <b>${R.perdidas}</b> oportunidades por ${dinC(c, R.perdido)}${R.sinMotivo ? `; <b>${R.sinMotivo}</b> no tienen motivo registrado` : ""}.` : ""}</p></div>` : "";
     return campSeccion("c-detalle", "C2", "Detalle de campaña", esc(c.nombre),
       `${encabezado}
       <div class="sub" style="margin:0;gap:8px;flex-wrap:wrap">${seg("camp-per", [["campana", "Toda la campaña"], ["periodo", `Periodo: ${esc(ctx().etiqueta)}`]], vista("camp-per", "campana"))} ${ms("cd-cart", c.carteras.map((x) => ({ v: x, t: nombreCartera(x) })).concat([{ v: "S/C", t: "Sin cartera" }]), "Cartera")}</div>
       ${tiles ? `<div class="tira tira-auto">${tiles}</div>` : `<div class="aviso">La campaña no tiene metas. ${esAdmin() ? "Edítala para definir su objetivo." : ""}</div>`}
       ${ritmoTxt}
-      <div class="tira tira-auto"><div class="celda"><label>Abiertas</label><div class="valor">${R.abiertas}</div><small>${fmtM(R.abierto)} en juego</small></div><div class="celda"><label>Ganadas</label><div class="valor pos">${R.ganadas}</div><small>${fmtM(R.ganado)}</small></div><div class="celda"><label>Perdidas</label><div class="valor neg">${R.perdidas}</div><small>${fmtM(R.perdido)}</small></div><div class="celda"><label>Tasa de cierre</label><div class="valor">${fmtP(R.tasa)}</div><small>${fmtP(R.tasa$)} en monto</small></div><div class="celda"><label>Ciclo promedio</label><div class="valor">${fin(R.cicloProm) ? Math.round(R.cicloProm) + " días" : "—"}</div><small>de alta a cierre ganado</small></div></div>
-      <div class="grid2">${graf || "<div></div>"}<div><div class="sub">Resultado por cartera <span class="der">${seg("cd-modo", [["monto", "Monto"], ["num", "Número"]], modoC)}</span></div><div class="graf"><canvas id="g-camp-cart" role="img" aria-label="Oportunidades por cartera"></canvas></div></div></div>
+      <div class="tira tira-auto"><div class="celda"><label>Abiertas</label><div class="valor">${R.abiertas}</div><small>${dinC(c, R.abierto)} en juego · ponderado ${dinC(c, R.ponderado)}</small></div><div class="celda"><label>Ganadas</label><div class="valor pos">${R.ganadas}</div><small>${dinC(c, R.ganado)}${R.pz_gan ? ` · ${R.pz_gan} pz` : ""}</small></div><div class="celda"><label>Perdidas</label><div class="valor neg">${R.perdidas}</div><small>${dinC(c, R.perdido)}${R.pz_per ? ` · ${R.pz_per} pz` : ""}</small></div><div class="celda"><label>Tasa de cierre</label><div class="valor">${fmtP(R.tasa)}</div><small>${fmtP(R.tasa$)} en monto</small></div><div class="celda"><label>Ciclo promedio</label><div class="valor">${fin(R.cicloProm) ? Math.round(R.cicloProm) + " días" : "—"}</div><small>de alta a cierre ganado</small></div></div>
+      ${tilesRep}
+      <div class="grid2">${graf || "<div></div>"}<div><div class="sub">Resultado por cartera <span class="der">${seg("cd-modo", [["monto", "Monto"], ["pz", "Piezas"], ["num", "Número"]], modoC)}</span></div><div class="graf"><canvas id="g-camp-cart" role="img" aria-label="Oportunidades por cartera"></canvas></div></div></div>
       ${tablaCart}
-      ${PR.length ? `<div><div class="sub">Modelos y productos</div><div class="tabla-wrap" style="max-height:none"><table class="t"><thead><tr><th>Marca · modelo</th><th class="n">Oportunidades</th><th class="n">Cotizado</th><th class="n">Ganado</th><th class="n">Perdido</th></tr></thead><tbody>${PR.map(([p, x]) => `<tr><td>${esc(p)}</td><td class="n">${x.n}</td><td class="n">${fmt$(x.cot)}</td><td class="n pos">${fmt$(x.gan)}</td><td class="n neg">${fmt$(x.per)}</td></tr>`).join("")}</tbody></table></div></div>` : ""}
+      ${tablaProd}
       ${tablaOport(c, todas)}`);
   }
 
@@ -1836,47 +1936,59 @@
     registrarMs("op-estado", Object.entries(ESTADO_OP).map(([v, [t]]) => ({ v, t })));
     const mot = [...new Set([...motivos(), ...todas.map((o) => o.motivo).filter(Boolean)])];
     registrarMs("op-motivo", [{ v: "", t: "(sin motivo)" }, ...mot.map((m) => ({ v: m, t: m }))]);
-    const q = (UI.busq["op-q"] || "").toLowerCase();
-    let L = todas.filter((o) => pasa("cd-cart", o.cartera || "S/C") && pasa("op-estado", o.estado) && (o.estado !== "perdida" || pasa("op-motivo", o.motivo || "")) && (!q || `${o.cliente} ${o.oportunidad} ${o.modelo}`.toLowerCase().includes(q)));
-    L = ordenar("op-tabla", L.map((o) => ({ ...o, monto: +o.monto || 0 })), "fecha_alta:d");
-    const opcCart = c.carteras.map((k) => `<option value="${k}">${esc(nombreCartera(k))}</option>`).join("");
-    const celda = (o, campo, tipo = "text", extra = "") => adm ? `<input data-op="${o.id}" data-campo="${campo}" type="${tipo}" value="${esc(o[campo] ?? "")}" ${extra} aria-label="${campo}">` : esc(o[campo] ?? "—");
-    const filas = L.map((o) => `<tr class="${o.estado === "perdida" && !o.motivo ? "falta-motivo" : ""}">
-      <td>${adm ? `<select data-op="${o.id}" data-campo="cartera" class="estado-sel" aria-label="Cartera"><option value="">—</option>${opcCart.replace(`value="${o.cartera}"`, `value="${o.cartera}" selected`)}</select>` : esc(o.cartera || "—")}</td>
-      <td style="min-width:160px">${celda(o, "cliente")}</td><td>${celda(o, "oportunidad")}</td><td>${celda(o, "modelo")}</td>
-      <td class="n" style="min-width:110px">${adm ? `<input data-op="${o.id}" data-campo="monto" inputmode="decimal" value="${esc(o.monto)}" style="text-align:right" aria-label="Monto">` : fmt$(+o.monto)}</td>
+    const q = ISELParser.norm(UI.busq["op-q"] || "");
+    let L = todas.filter((o) => pasa("cd-cart", o.cartera || "S/C") && pasa("op-estado", o.estado) && (o.estado !== "perdida" || pasa("op-motivo", o.motivo || "")) && (!q || ISELParser.norm(`${o.cliente} ${o.contacto || ""} ${o.oportunidad || ""} ${o.cotizacion || ""} ${o.factura || ""} ${partidasDe(o).map((p) => `${p.modelo} ${p.numero_parte}`).join(" ")}`).includes(q)));
+    L = ordenar("op-tabla", L.map((o) => ({ ...o, monto: +o.monto || 0, pz: o.estado === "ganada" ? pzVenta(o) : piezas(o) })), "fecha_alta:d");
+    const filas = L.map((o) => `<tr class="${o.estado === "perdida" && !o.motivo ? "falta-motivo" : ""}" ${adm ? `data-op-fila="${o.id}"` : ""}>
+      <td>${esc(o.cartera || "—")}</td>
+      <td class="nombre" style="min-width:170px"><b>${esc(o.cliente)}</b>${o.contacto ? `<div class="cod" style="margin:0">${esc(o.contacto)}</div>` : ""}</td>
+      <td>${esc(o.oportunidad || "—")}${o.cotizacion ? `<div class="cod" style="margin:0">Cot. ${esc(o.cotizacion)}</div>` : ""}${o.origen ? `<div class="cod" style="margin:0">${esc(o.origen)}</div>` : ""}</td>
+      <td style="min-width:130px">${esc(resumenProd(o))}</td><td class="n">${o.pz || "—"}</td><td class="n">${dinC(c, +o.monto)}</td>
+      <td>${o.estado === "abierta" ? `${esc(ETAPA[o.etapa] ? ETAPA[o.etapa].n : "—")}${fin(o.probabilidad) ? `<div class="cod" style="margin:0">${o.probabilidad}%</div>` : ""}` : "Cerrada"}</td>
       <td>${adm ? `<select data-op="${o.id}" data-campo="estado" class="estado-sel ${o.estado === "ganada" ? "cumplido" : o.estado === "perdida" ? "no_cumplido" : ""}" aria-label="Estado">${Object.entries(ESTADO_OP).map(([v, [t]]) => `<option value="${v}" ${o.estado === v ? "selected" : ""}>${t}</option>`).join("")}</select>` : `<span class="sem ${ESTADO_OP[o.estado][1]}">${ESTADO_OP[o.estado][0]}</span>`}</td>
-      <td style="min-width:170px">${o.estado !== "perdida" ? "" : adm ? `<select data-op="${o.id}" data-campo="motivo" class="estado-sel" aria-label="Motivo de pérdida"><option value="">Elegir motivo…</option>${mot.map((m) => `<option ${o.motivo === m ? "selected" : ""}>${esc(m)}</option>`).join("")}</select>` : esc(o.motivo || "Sin motivo")}${o.estado === "perdida" ? `<div style="margin-top:4px">${celda(o, "competidor", "text", 'placeholder="Competidor"')}</div>` : ""}</td>
-      <td>${celda(o, "fecha_alta", "date")}</td><td>${celda(o, "fecha_cierre", "date")}</td><td>${celda(o, "fecha_factura", "date")}</td>
-      <td class="n" style="min-width:100px">${adm ? `<input data-op="${o.id}" data-campo="monto_facturado" inputmode="decimal" value="${esc(o.monto_facturado ?? "")}" style="text-align:right" aria-label="Monto facturado">` : fmt$(+o.monto_facturado)}</td>
-      <td style="min-width:160px">${celda(o, "detalle", "text", 'placeholder="Comentarios"')}</td>
-      ${adm ? `<td><button class="restaurar" type="button" data-op-borrar="${o.id}" title="Eliminar">${UI.borrar === "o" + o.id ? "¿Eliminar?" : "✕"}</button></td>` : ""}</tr>`).join("");
+      <td style="min-width:170px">${o.estado !== "perdida" ? "" : adm ? `<select data-op="${o.id}" data-campo="motivo" class="estado-sel" aria-label="Motivo de pérdida"><option value="">Elegir motivo…</option>${mot.map((m) => `<option ${o.motivo === m ? "selected" : ""}>${esc(m)}</option>`).join("")}</select>` : esc(o.motivo || "Sin motivo")}${o.estado === "perdida" && o.competidor ? `<div class="cod" style="margin:0">vs ${esc(o.competidor)}</div>` : ""}</td>
+      <td class="mono" style="white-space:nowrap">${esc(o.fecha_alta || "—")}</td><td class="mono" style="white-space:nowrap">${esc(o.fecha_cierre || (o.fecha_estimada ? "≈ " + o.fecha_estimada : "—"))}</td>
+      <td class="n" style="white-space:nowrap">${o.factura || o.fecha_factura || o.monto_facturado ? `${dinC(c, +o.monto_facturado || (o.estado === "ganada" ? +o.monto : 0))}<div class="cod" style="margin:0">${esc(o.factura || o.fecha_factura || "")}</div>` : "—"}</td>
+      <td style="max-width:220px">${esc(o.detalle || "")}</td>
+      ${adm ? `<td style="white-space:nowrap"><button class="btn chico" type="button" data-op-editar="${o.id}">Editar</button> <button class="restaurar" type="button" data-op-borrar="${o.id}" title="Eliminar">${UI.borrar === "o" + o.id ? "¿Eliminar?" : "✕"}</button></td>` : ""}</tr>`).join("");
     return `<div><div class="sub">Oportunidades de la campaña (${L.length} de ${todas.length})
-        <span class="der" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><input type="search" class="campo" style="width:190px;padding:4px 8px" placeholder="Buscar cliente o modelo" data-busq="op-q" id="busq-op" value="${esc(UI.busq["op-q"] || "")}">${ms("op-estado", Object.entries(ESTADO_OP).map(([v, [t]]) => ({ v, t })), "Estado")} ${ms("op-motivo", [{ v: "", t: "(sin motivo)" }, ...mot.map((m) => ({ v: m, t: m }))], "Motivo", true)}
+        <span class="der" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><input type="search" class="campo" style="width:200px;padding:4px 8px" placeholder="Buscar cliente, folio o modelo" data-busq="op-q" id="busq-op" value="${esc(UI.busq["op-q"] || "")}">${ms("op-estado", Object.entries(ESTADO_OP).map(([v, [t]]) => ({ v, t })), "Estado")} ${ms("op-motivo", [{ v: "", t: "(sin motivo)" }, ...mot.map((m) => ({ v: m, t: m }))], "Motivo", true)}
         ${adm ? `<button class="btn chico prim" type="button" data-op-nueva="${c.id}">+ Oportunidad</button><button class="btn chico" type="button" data-op-pegar>Pegar desde Excel</button>` : ""}</span></div>
-      ${adm && UI.pegar ? `<div class="caja"><p style="margin:0 0 6px">Copia filas de Excel con estas columnas, en este orden: <b>Cartera · Cliente · Oportunidad · Modelo · Monto · Estado · Motivo · Fecha alta · Fecha cierre · Fecha factura · Monto facturado</b>. La cartera puede ser el número (C10) o el nombre; el estado, Abierta / Ganada / Perdida; las fechas en dd/mm/aaaa.</p><textarea class="respaldo" id="op-pegado" placeholder="Pega aquí"></textarea><div style="display:flex;gap:8px;margin-top:6px"><button class="btn chico prim" type="button" data-op-importar="${c.id}">Agregar oportunidades</button><button class="btn chico" type="button" data-op-pegar>Cancelar</button></div></div>` : ""}
-      <div class="tabla-wrap"><table class="t compromisos tabla-op"><thead><tr>${th("op-tabla", "cartera", "Cartera", false)}${th("op-tabla", "cliente", "Cliente", false)}<th>Oportunidad</th><th>Modelo</th>${th("op-tabla", "monto", "Monto")}${th("op-tabla", "estado", "Estado", false)}<th>Motivo de pérdida</th>${th("op-tabla", "fecha_alta", "Alta", false)}${th("op-tabla", "fecha_cierre", "Cierre", false)}<th>Facturada</th><th class="n">Facturado</th><th>Comentarios</th>${adm ? "<th></th>" : ""}</tr></thead>
-      <tbody>${filas || `<tr><td colspan="13">Sin oportunidades${adm ? ". Usa + Oportunidad o Pegar desde Excel." : "."}</td></tr>`}</tbody></table></div>
-      ${todas.some((o) => o.estado === "perdida" && !o.motivo) ? `<p class="nota-pie neg">Las filas marcadas son oportunidades perdidas sin motivo: regístralo para que el análisis de pérdidas sea útil.</p>` : ""}</div>`;
+      ${adm && UI.pegar ? `<div class="caja"><p style="margin:0 0 6px">Copia filas de Excel con estas columnas, en este orden: <b>Cartera · Cliente · Oportunidad · Modelo · Cantidad (pz) · Monto · Estado · Motivo · Fecha alta · Fecha cierre · Fecha factura · Monto facturado</b>. La cartera puede ser el número (C10) o el nombre; el estado, Abierta / Ganada / Perdida; las fechas en dd/mm/aaaa. Para cotizaciones y ventas exportadas de Odoo usa <b>Cargar reporte de campaña</b>.</p><textarea class="respaldo" id="op-pegado" placeholder="Pega aquí"></textarea><div style="display:flex;gap:8px;margin-top:6px"><button class="btn chico prim" type="button" data-op-importar="${c.id}">Agregar oportunidades</button><button class="btn chico" type="button" data-op-pegar>Cancelar</button></div></div>` : ""}
+      <div class="tabla-wrap"><table class="t compromisos tabla-op"><thead><tr>${th("op-tabla", "cartera", "Cartera", false)}${th("op-tabla", "cliente", "Cliente", false)}<th>Oportunidad</th><th>Productos</th>${th("op-tabla", "pz", "Pz")}${th("op-tabla", "monto", "Monto")}<th>Etapa</th>${th("op-tabla", "estado", "Estado", false)}<th>Motivo de pérdida</th>${th("op-tabla", "fecha_alta", "Alta", false)}${th("op-tabla", "fecha_cierre", "Cierre", false)}<th class="n">Facturado</th><th>Comentarios</th>${adm ? "<th></th>" : ""}</tr></thead>
+      <tbody>${filas || `<tr><td colspan="14">Sin oportunidades${adm ? ". Usa + Oportunidad, Pegar desde Excel o Cargar reporte de campaña." : "."}</td></tr>`}</tbody></table></div>
+      ${todas.some((o) => o.estado === "perdida" && !o.motivo) ? `<p class="nota-pie neg">Las filas marcadas son oportunidades perdidas sin motivo: regístralo para que el análisis de pérdidas sea útil.</p>` : ""}
+      ${adm && todas.length ? `<p class="nota-pie">Doble clic en una fila o <b>Editar</b> para ver y cambiar todos los datos de la oportunidad.</p>` : ""}</div>`;
   }
 
   function editorCampana() {
     const nueva = UI.campEdit === "nueva";
-    const c = UI.campBorrador || (UI.campBorrador = nueva ? { id: crypto.randomUUID ? crypto.randomUUID() : uid(), nombre: "", tipo: "outbound", estado: "activa", inicio: hoyIso(), fin: "", marca: "", modelos: "", carteras: [], objetivo: "", metas: { principal: "ganado" }, notas: "" } : JSON.parse(JSON.stringify(G.campanas[UI.campEdit])));
-    const m = c.metas || (c.metas = {});
+    const c = UI.campBorrador || (UI.campBorrador = nueva ? { id: nuevoId(), nombre: "", tipo: "outbound", estado: "activa", inicio: hoyIso(), fin: "", marca: "", modelos: "", carteras: [], objetivo: "", metas: { principal: "ganado" }, notas: "", productos: [], ajustes: { moneda: "MXN" } } : JSON.parse(JSON.stringify(G.campanas[UI.campEdit])));
+    const m = c.metas || (c.metas = {}); c.productos = c.productos || []; const Aj = c.ajustes || (c.ajustes = {});
     const cart = Object.entries(IDX.cartNom).sort().filter(([k, n]) => n && n !== "(sin asignar)" && !/vacante/i.test(n));
+    const kP = principal(c); const mc = Aj.metasCartera || {};
+    const prodFilas = c.productos.map((p, i) => `<tr><td class="mono">${esc(p.numero_parte || "—")}</td><td><b>${esc(p.modelo || "—")}</b></td><td>${esc(p.marca || "—")}</td><td>${esc(p.linea || "—")}</td><td style="max-width:260px">${esc(p.descripcion || "")}</td><td class="n">${fin(numC(p.precio)) ? dinC(c, +p.precio) : "—"}</td><td>${esc(p.unidad || "pz")}</td><td style="white-space:nowrap"><button class="btn chico" type="button" data-cb-prod-editar="${i}">Editar</button> <button class="restaurar" type="button" data-cb-prod-borrar="${i}" title="Quitar">✕</button></td></tr>`).join("");
     return `<form id="f-campana" class="form-camp">
       <div class="grid2"><div><label class="campo-label" for="cf-nombre">Nombre de la campaña</label><input class="campo" id="cf-nombre" data-cb="nombre" value="${esc(c.nombre)}" required placeholder="Ej. Sensores de seguridad SICK en automotriz"></div>
         <div class="grid3" style="gap:10px"><div><label class="campo-label" for="cf-tipo">Tipo</label><select class="campo" id="cf-tipo" data-cb="tipo"><option value="outbound" ${c.tipo === "outbound" ? "selected" : ""}>Outbound</option><option value="inbound" ${c.tipo === "inbound" ? "selected" : ""}>Inbound</option></select></div>
           <div><label class="campo-label" for="cf-estado">Estado</label><select class="campo" id="cf-estado" data-cb="estado">${Object.entries(ESTADO_C).map(([v, t]) => `<option value="${v}" ${c.estado === v ? "selected" : ""}>${t}</option>`).join("")}</select></div>
           <div><label class="campo-label" for="cf-marca">Marca</label><input class="campo" id="cf-marca" data-cb="marca" list="lista-marcas" value="${esc(c.marca)}"><datalist id="lista-marcas">${marcasPortafolio().map((x) => `<option value="${esc(x)}">`).join("")}</datalist></div></div></div>
       <div class="grid2"><div class="grid2" style="gap:10px"><div><label class="campo-label" for="cf-inicio">Inicio</label><input class="campo" type="date" id="cf-inicio" data-cb="inicio" value="${esc(c.inicio)}"></div><div><label class="campo-label" for="cf-fin">Fin</label><input class="campo" type="date" id="cf-fin" data-cb="fin" value="${esc(c.fin)}"></div></div>
-        <div><label class="campo-label" for="cf-modelos">Modelos o productos que promueve</label><input class="campo" id="cf-modelos" data-cb="modelos" value="${esc(c.modelos)}" placeholder="Ej. deTec4, nanoScan3, S3000"></div></div>
+        <div class="grid2" style="gap:10px"><div><label class="campo-label" for="cf-moneda">Moneda de la campaña</label><select class="campo" id="cf-moneda" data-cba="moneda"><option value="MXN" ${!enUSD(c) ? "selected" : ""}>Pesos (MXN)</option><option value="USD" ${enUSD(c) ? "selected" : ""}>Dólares (USD)</option></select></div>
+          <div><label class="campo-label" for="cf-paridad">Paridad (MXN por USD)</label><input class="campo" id="cf-paridad" data-cba="paridad" inputmode="decimal" value="${esc(Aj.paridad ?? "")}" placeholder="17.5"></div></div></div>
+      <div><label class="campo-label" for="cf-modelos">Modelos o productos que promueve (texto libre)</label><input class="campo" id="cf-modelos" data-cb="modelos" value="${esc(c.modelos)}" placeholder="Ej. deTec4, nanoScan3, S3000"></div>
+      <div><span class="campo-label">Productos de la campaña (${c.productos.length}) <button class="btn chico" type="button" data-cb-prod-nuevo>+ Agregar producto</button></span>
+        ${c.productos.length ? `<div class="tabla-wrap" style="max-height:320px"><table class="t"><thead><tr><th>Número de parte</th><th>Modelo</th><th>Marca</th><th>Línea</th><th>Descripción</th><th class="n">Precio lista</th><th>Unidad</th><th></th></tr></thead><tbody>${prodFilas}</tbody></table></div>` : `<p class="nota-pie" style="margin:4px 0 0">Agrega los modelos que participan: se pueden buscar en el catálogo de productos facturados y luego elegir en cada oportunidad.</p>`}</div>
       <div><label class="campo-label" for="cf-objetivo">Objetivo de la campaña</label><textarea class="campo" id="cf-objetivo" data-cb="objetivo" rows="2" placeholder="Qué se busca lograr y con qué clientes">${esc(c.objetivo)}</textarea></div>
       <div><span class="campo-label">Carteras que participan (${c.carteras.length}) <button class="btn chico" type="button" data-cb-todas>${c.carteras.length === cart.length ? "Quitar todas" : "Todas"}</button></span>
         <div class="checks">${cart.map(([k, n]) => `<label><input type="checkbox" data-cb-cart value="${k}" ${c.carteras.includes(k) ? "checked" : ""}> <span class="cod" style="margin:0">${k}</span> ${esc(n)}</label>`).join("")}</div></div>
       <div><span class="campo-label">Metas (llena las que apliquen y marca la principal)</span>
-        <div class="metas">${METRICAS.map(([k2, n, u]) => `<label class="meta-item"><input type="radio" name="cf-principal" value="${k2}" ${principal(c) === k2 ? "checked" : ""} data-cb-principal aria-label="Meta principal"> <span>${n}${u === "$" ? " ($)" : ""}</span><input class="campo" inputmode="decimal" data-cb-meta="${k2}" value="${esc(m[k2] ?? "")}" placeholder="—"></label>`).join("")}</div></div>
+        <div class="metas">${METRICAS.map(([k2, n, u]) => `<label class="meta-item"><input type="radio" name="cf-principal" value="${k2}" ${kP === k2 ? "checked" : ""} data-cb-principal aria-label="Meta principal"> <span>${n}${u === "$" ? (enUSD(c) ? " (US$)" : " ($)") : u === "pz" ? " (pz)" : ""}</span><input class="campo" inputmode="decimal" data-cb-meta="${k2}" value="${esc(m[k2] ?? "")}" placeholder="—"></label>`).join("")}</div></div>
+      ${c.carteras.length ? `<details data-mc-det ${Object.keys(mc).length || UI.mcAbierto ? "open" : ""}><summary class="campo-label" style="cursor:pointer">Meta por cartera de «${esc(MET[Aj.metaCartMetrica || kP] ? MET[Aj.metaCartMetrica || kP].n : "")}» (opcional; si no se llena, la meta principal se reparte en partes iguales)</summary>
+        <div class="metas">${c.carteras.map((k2) => `<label class="meta-item"><span><span class="cod" style="margin:0">${k2}</span> ${esc((IDX.cartNom[k2] || "").split(" ").slice(0, 2).join(" "))}</span><input class="campo" inputmode="decimal" data-cb-mc="${k2}" value="${esc(mc[k2] ?? "")}" placeholder="—"></label>`).join("")}</div>
+        <p class="nota-pie">Suma: ${Object.values(mc).reduce((s, x) => s + (+x || 0), 0).toLocaleString("es-MX")} · se mide con la meta principal${Aj.metaCartMetrica && Aj.metaCartMetrica !== kP ? ` (las metas por cartera se capturaron para «${MET[Aj.metaCartMetrica].n}»; cámbiala como principal o vuelve a capturarlas)` : ""}.</p></details>` : ""}
+      <div><span class="campo-label">Indicadores propios de esta campaña <button class="btn chico" type="button" data-cb-x-nuevo>+ Indicador</button></span>
+        ${(Aj.extra || []).length ? `<div class="tabla-wrap" style="max-height:none"><table class="t"><thead><tr><th>Indicador</th><th>Unidad</th><th class="n">Meta</th><th class="n">Valor actual</th><th></th></tr></thead><tbody>${Aj.extra.map((x, i) => `<tr><td><input class="campo" data-cb-x="${i}" data-campo="n" value="${esc(x.n || "")}" placeholder="Ej. Visitas a planta, demos, registros"></td><td style="width:110px"><input class="campo" data-cb-x="${i}" data-campo="u" value="${esc(x.u || "")}" placeholder="visitas"></td><td style="width:120px"><input class="campo" data-cb-x="${i}" data-campo="meta" inputmode="decimal" value="${esc(x.meta ?? "")}"></td><td style="width:120px"><input class="campo" data-cb-x="${i}" data-campo="v" inputmode="decimal" value="${esc(x.v ?? "")}"></td><td><button class="restaurar" type="button" data-cb-x-borrar="${i}" title="Quitar">✕</button></td></tr>`).join("")}</tbody></table></div>` : `<p class="nota-pie" style="margin:4px 0 0">Para lo que esta campaña mide y no está en las metas de arriba (visitas, demostraciones, registros, muestras entregadas…).</p>`}</div>
       <div><label class="campo-label" for="cf-notas">Notas</label><textarea class="campo" id="cf-notas" data-cb="notas" rows="2">${esc(c.notas)}</textarea></div>
       <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn" type="button" data-camp-cancelar>Cancelar</button><button class="btn prim" type="submit">${nueva ? "Crear campaña" : "Guardar cambios"}</button></div>
     </form>`;
@@ -1885,31 +1997,337 @@
   /* ---------------------------------------------------- C3 Pérdidas */
   function cPerdidas() {
     const { cs, opsF } = campFiltradas(); const enP = filtroFechas(); const C = colores();
-    const perd = cs.flatMap((c) => opsF(c).map((o) => ({ ...o, campana: c.nombre }))).filter((o) => o.estado === "perdida" && enP(o.fecha_cierre || o.fecha_alta));
+    const perd = cs.flatMap((c) => opsF(c).map((o) => ({ ...o, campana: c.nombre, monto: (+o.monto || 0) * aMXN(c) }))).filter((o) => o.estado === "perdida" && enP(o.fecha_cierre || o.fecha_alta));
     const cerradas = cs.flatMap(opsF).filter((o) => o.estado !== "abierta" && enP(o.fecha_cierre || o.fecha_alta)).length;
     const modo = vista("perd-modo", "num");
-    const pm = {}; for (const o of perd) { const k = o.motivo || "(sin motivo)"; const x = (pm[k] = pm[k] || { n: 0, m: 0 }); x.n++; x.m += +o.monto || 0; }
-    const M = Object.entries(pm).sort((a, b) => (modo === "num" ? b[1].n - a[1].n : b[1].m - a[1].m));
-    chart("g-perd", { type: "bar", data: { labels: M.map(([k]) => (k.length > 34 ? k.slice(0, 33) + "…" : k)), datasets: [{ maxBarThickness: 26, label: modo === "num" ? "Oportunidades perdidas" : "Monto perdido", data: M.map(([, x]) => (modo === "num" ? x.n : x.m)), backgroundColor: M.map(([k]) => (k === "(sin motivo)" ? C.meta : C.bad)) }] },
-      options: { indexAxis: "y", plugins: { legend: { display: false }, tooltip: { callbacks: { title: (it) => M[it[0].dataIndex][0], label: (x) => { const v = M[x.dataIndex][1]; return `${v.n} oportunidades · ${fmt$(v.m)} · ${fmtP(div(v.n, perd.length))} de las pérdidas`; } } } }, scales: { x: modo === "num" ? { beginAtZero: true, grid: { color: C.grid }, ticks: { precision: 0 } } : ejeM({ beginAtZero: true }), y: { grid: { display: false }, ticks: { autoSkip: false } } } } });
+    const pm = {}; for (const o of perd) { const k = o.motivo || "(sin motivo)"; const x = (pm[k] = pm[k] || { n: 0, m: 0, pz: 0 }); x.n++; x.m += +o.monto || 0; x.pz += piezas(o); }
+    const M = Object.entries(pm).sort((a, b) => (modo === "num" ? b[1].n - a[1].n : modo === "pz" ? b[1].pz - a[1].pz : b[1].m - a[1].m));
+    chart("g-perd", { type: "bar", data: { labels: M.map(([k]) => (k.length > 34 ? k.slice(0, 33) + "…" : k)), datasets: [{ maxBarThickness: 26, label: modo === "num" ? "Oportunidades perdidas" : modo === "pz" ? "Piezas perdidas" : "Monto perdido", data: M.map(([, x]) => (modo === "num" ? x.n : modo === "pz" ? x.pz : x.m)), backgroundColor: M.map(([k]) => (k === "(sin motivo)" ? C.meta : C.bad)) }] },
+      options: { indexAxis: "y", plugins: { legend: { display: false }, tooltip: { callbacks: { title: (it) => M[it[0].dataIndex][0], label: (x) => { const v = M[x.dataIndex][1]; return `${v.n} oportunidades · ${v.pz} pz · ${fmt$(v.m)} · ${fmtP(div(v.n, perd.length))} de las pérdidas`; } } } }, scales: { x: modo !== "monto" ? { beginAtZero: true, grid: { color: C.grid }, ticks: { precision: 0 } } : ejeM({ beginAtZero: true }), y: { grid: { display: false }, ticks: { autoSkip: false } } } } });
     const carts = [...new Set(perd.map((o) => o.cartera || "S/C"))].sort();
     const mat = `<div class="tabla-wrap"><table class="t calor"><thead><tr><th>Motivo</th>${carts.map((k) => `<th class="n">${esc(k)}</th>`).join("")}<th class="n">Total</th></tr></thead><tbody>${M.map(([mo, x]) => `<tr><td>${esc(mo)}</td>${carts.map((k) => { const n = perd.filter((o) => (o.motivo || "(sin motivo)") === mo && (o.cartera || "S/C") === k).length; return `<td class="c" style="${n ? `background:${alfa(C.bad, Math.min(0.7, 0.12 + n / Math.max(...M.map((z) => z[1].n)) * 0.55))}` : ""}">${n || "·"}</td>`; }).join("")}<td class="c" style="font-weight:600">${x.n}</td></tr>`).join("")}</tbody></table></div>`;
     const comp = {}; for (const o of perd) if (o.competidor) { const k = o.competidor.trim().toUpperCase(); const x = (comp[k] = comp[k] || { n: 0, m: 0 }); x.n++; x.m += +o.monto || 0; }
     const CP = Object.entries(comp).sort((a, b) => b[1].m - a[1].m).slice(0, 10);
     const top = M[0] && M[0][0] !== "(sin motivo)" ? M[0] : M[1];
-    const catalogo = esAdmin() ? `<details><summary class="campo-label" style="cursor:pointer">Catálogo de motivos de pérdida (${motivos().length})</summary><div class="motivos-ed">${motivos().map((mo, i) => `<div style="display:flex;gap:6px"><input class="campo" data-motivo="${i}" value="${esc(mo)}" aria-label="Motivo ${i + 1}"><button class="restaurar" type="button" data-motivo-borrar="${i}" title="Quitar">✕</button></div>`).join("")}<button class="btn chico" type="button" data-motivo-nuevo>+ Motivo</button></div><p class="nota-pie">Cambiar el nombre de un motivo no modifica las oportunidades ya registradas con el nombre anterior.</p></details>` : "";
+    const catalogoM = esAdmin() ? `<details><summary class="campo-label" style="cursor:pointer">Catálogo de motivos de pérdida (${motivos().length})</summary><div class="motivos-ed">${motivos().map((mo, i) => `<div style="display:flex;gap:6px"><input class="campo" data-motivo="${i}" value="${esc(mo)}" aria-label="Motivo ${i + 1}"><button class="restaurar" type="button" data-motivo-borrar="${i}" title="Quitar">✕</button></div>`).join("")}<button class="btn chico" type="button" data-motivo-nuevo>+ Motivo</button></div><p class="nota-pie">Cambiar el nombre de un motivo no modifica las oportunidades ya registradas con el nombre anterior.</p></details>` : "";
     return campSeccion("c-perdidas", "C3", "Análisis de pérdidas", "¿Por qué perdemos oportunidades?",
       perd.length ? `<div class="tira"><div class="celda"><label>Oportunidades perdidas</label><div class="valor neg">${perd.length}</div><small>${fmtP(div(perd.length, cerradas))} de las cerradas</small></div>
-        <div class="celda"><label>Monto perdido</label><div class="valor neg">${fmtM(perd.reduce((s, o) => s + (+o.monto || 0), 0))}</div><small>con los filtros del resumen</small></div>
+        <div class="celda"><label>Monto perdido</label><div class="valor neg">${fmtM(perd.reduce((s, o) => s + (+o.monto || 0), 0))}</div><small>${perd.reduce((s, o) => s + piezas(o), 0).toLocaleString("es-MX")} pz · en pesos</small></div>
         <div class="celda"><label>Motivo principal</label><div class="valor" style="font-size:20px;line-height:1.2">${top ? esc(top[0]) : "—"}</div><small>${top ? `${top[1].n} oportunidades · ${fmtM(top[1].m)}` : ""}</small></div>
         <div class="celda"><label>Sin motivo registrado</label><div class="valor ${pm["(sin motivo)"] ? "neg" : ""}">${pm["(sin motivo)"] ? pm["(sin motivo)"].n : 0}</div><small>pérdidas por documentar</small></div></div>
-      <div class="grid-6-4"><div><div class="sub">Motivos de pérdida <span class="der">${seg("perd-modo", [["num", "Número"], ["monto", "Monto"]], modo)}</span></div><div class="graf" style="height:${Math.max(220, M.length * 30 + 50)}px"><canvas id="g-perd" role="img" aria-label="Motivos de pérdida"></canvas></div></div>
+      <div class="grid-6-4"><div><div class="sub">Motivos de pérdida <span class="der">${seg("perd-modo", [["num", "Número"], ["pz", "Piezas"], ["monto", "Monto"]], modo)}</span></div><div class="graf" style="height:${Math.max(220, M.length * 30 + 50)}px"><canvas id="g-perd" role="img" aria-label="Motivos de pérdida"></canvas></div></div>
         <div><div class="sub">Competidores a los que perdimos</div>${CP.length ? `<div class="tabla-wrap" style="max-height:none"><table class="t"><tbody>${CP.map(([k, x]) => `<tr><td>${esc(k)}</td><td class="n">${x.n}</td><td class="n neg">${fmt$(x.m)}</td></tr>`).join("")}</tbody></table></div>` : `<div class="vacio">Registra el competidor en las oportunidades perdidas para verlo aquí.</div>`}</div></div>
-      <div><div class="sub">Motivo por cartera</div>${mat}</div>${catalogo}`
-      : `<div class="vacio">No hay oportunidades perdidas con estos filtros.</div>${catalogo}`);
+      <div><div class="sub">Motivo por cartera</div>${mat}</div>${catalogoM}`
+      : `<div class="vacio">No hay oportunidades perdidas con estos filtros.</div>${catalogoM}`);
   }
 
   const CAMP_SECC = [["c-resumen", "C1", "Resumen", cResumen], ["c-detalle", "C2", "Detalle", cDetalle], ["c-perdidas", "C3", "Pérdidas", cPerdidas]];
+
+  /* ------------------------------------------------ ventanas (modales) */
+  function modalHTML() {
+    const M = UI.modal; if (!M) return "";
+    let cuerpo = "";
+    try { cuerpo = M.tipo === "producto" ? modalProducto(M) : M.tipo === "oport" ? modalOport(M) : M.tipo === "reporte" ? modalReporte(M) : ""; }
+    catch (e) { console.error(e); cuerpo = `<div class="aviso">No se pudo mostrar la ventana: ${esc(e.message)}</div><button class="btn" type="button" data-md-cerrar>Cerrar</button>`; }
+    return `<div class="modal-fondo" id="modal-camp"><div class="modal modal-ancho" role="dialog" aria-modal="true" aria-labelledby="modal-tit">${cuerpo}</div></div>`;
+  }
+  function renderModal() {
+    const el = document.getElementById("modal-camp"); if (!el) { render(); return; }
+    const a = document.activeElement; const foco = a && a.id; const pos = a && typeof a.selectionStart === "number" ? a.selectionStart : null;
+    const sc = el.querySelector(".modal").scrollTop;
+    CTX = null; PEND = [];
+    const tmp = document.createElement("div"); tmp.innerHTML = modalHTML(); const nu = tmp.firstElementChild;
+    if (nu) { el.replaceWith(nu); nu.querySelector(".modal").scrollTop = sc; } else el.remove();
+    if (foco) { const x = document.getElementById(foco); if (x) { x.focus(); if (pos !== null && x.setSelectionRange && /text|search/.test(x.type)) try { x.setSelectionRange(pos, pos); } catch (e) {} } }
+  }
+  const campoM = (pref, campo, etiqueta, valor, extra = "", tipo = "text") => `<div><label class="campo-label" for="${pref}-${campo}">${etiqueta}</label><input class="campo" id="${pref}-${campo}" type="${tipo}" data-${pref === "mp" ? "mp" : "mo"}="${campo}" value="${esc(valor ?? "")}" ${extra}></div>`;
+  const resultadosCat = (res, attr, c) => (res && res.length ? `<div class="md-res" role="listbox">${res.map((p, i) => `<button type="button" class="md-res-item" ${attr}="${i}"><b>${esc(p.modelo || "—")}</b> <span class="mono">${esc(p.numero_parte || "")}</span> <span class="cod" style="margin:0">${esc([p.marca, p.linea].filter(Boolean).join(" · "))}</span><small>${esc((p.descripcion || "").slice(0, 70))}${fin(+p.precio) && p.precio !== null ? ` · ${dinC(c, +p.precio)}` : ""} · ${esc(p.fuente)}</small></button>`).join("")}</div>` : "");
+
+  // Producto de la campaña
+  function modalProducto(M) {
+    const c = M.cid ? G.campanas[M.cid] : UI.campBorrador; const p = M.p; const n = ((c && c.productos) || []).length;
+    return `<div class="modal-cab"><strong id="modal-tit">${M.i !== null && M.i !== undefined ? "Editar producto" : "Agregar producto a la campaña"}</strong><button class="restaurar" type="button" data-md-cerrar title="Cerrar (Esc)">✕</button></div>
+      <div><label class="campo-label" for="mp-q">Buscar en el catálogo (modelo, número de parte, marca o descripción)</label><input class="campo" id="mp-q" type="search" data-mp-q value="${esc(M.q || "")}" placeholder="Ej. WTM10, 1133547, deTec4" autocomplete="off">
+        ${resultadosCat(M.res, "data-mp-elegir", c)}${(M.q || "").length >= 2 && !(M.res || []).length ? `<p class="nota-pie">Sin coincidencias en el catálogo: captura los datos abajo.</p>` : ""}</div>
+      <div class="form-grid">${campoM("mp", "modelo", "Modelo *", p.modelo, 'required')}${campoM("mp", "numero_parte", "Número de parte", p.numero_parte)}${campoM("mp", "marca", "Marca", p.marca, 'list="lista-marcas-m"')}${campoM("mp", "linea", "Línea o familia", p.linea)}
+        ${campoM("mp", "precio", `Precio de lista por unidad (${enUSD(c) ? "USD" : "MXN"})`, p.precio, 'inputmode="decimal"')}
+        <div><label class="campo-label" for="mp-unidad">Unidad</label><select class="campo" id="mp-unidad" data-mp="unidad">${UNIDADES.map((u) => `<option ${(p.unidad || "pz") === u ? "selected" : ""}>${u}</option>`).join("")}</select></div></div>
+      ${campoM("mp", "descripcion", "Descripción", p.descripcion)}
+      <datalist id="lista-marcas-m">${marcasPortafolio().map((x) => `<option value="${esc(x)}">`).join("")}</datalist>
+      <div class="modal-pie"><span class="nota-pie" style="margin:0">${n} producto${n === 1 ? "" : "s"} en la campaña${M.agregados ? ` · ${M.agregados} agregado${M.agregados === 1 ? "" : "s"} ahora` : ""}</span><span style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn" type="button" data-md-cerrar>${M.agregados ? "Terminar" : "Cancelar"}</button>${M.i !== null && M.i !== undefined ? `<button class="btn prim" type="button" data-mp-guardar="cerrar">Guardar</button>` : `<button class="btn" type="button" data-mp-guardar="seguir">Agregar y seguir</button><button class="btn prim" type="button" data-mp-guardar="cerrar">Agregar y cerrar</button>`}</span></div>`;
+  }
+  function abrirProducto(cid, i) {
+    const c = cid ? G.campanas[cid] : UI.campBorrador;
+    const p = i !== null && i !== undefined ? { ...c.productos[i] } : { id: nuevoId(), numero_parte: "", modelo: "", marca: c.marca || "", linea: "", descripcion: "", precio: "", unidad: "pz" };
+    UI.modal = { tipo: "producto", cid: cid || null, i: i ?? null, p, q: "", res: [], agregados: 0 };
+    render(); setTimeout(() => { const el = $("#mp-q"); if (el) el.focus(); }, 20);
+  }
+  function guardarProducto(modo) {
+    const M = UI.modal; const c = M.cid ? G.campanas[M.cid] : UI.campBorrador; const p = M.p;
+    p.modelo = String(p.modelo || "").trim(); p.numero_parte = String(p.numero_parte || "").trim();
+    if (!p.modelo && !p.numero_parte) { toast("Escribe el modelo o elige un producto del catálogo."); const el = $("#mp-modelo"); if (el) el.focus(); return; }
+    if (!p.modelo) p.modelo = p.numero_parte;
+    p.precio = numC(p.precio); c.productos = c.productos || [];
+    if (M.i !== null) c.productos[M.i] = p;
+    else {
+      const j = c.productos.findIndex((x) => claveProd(x) === claveProd(p));
+      if (j >= 0) { c.productos[j] = { ...c.productos[j], ...p, id: c.productos[j].id }; toast("Ese producto ya estaba en la campaña: se actualizaron sus datos."); }
+      else c.productos.push(p);
+    }
+    if (M.cid) guardar();
+    if (modo === "seguir") { UI.modal = { tipo: "producto", cid: M.cid, i: null, p: { id: nuevoId(), numero_parte: "", modelo: "", marca: p.marca, linea: "", descripcion: "", precio: "", unidad: "pz" }, q: "", res: [], agregados: (M.agregados || 0) + 1 }; render(); setTimeout(() => { const el = $("#mp-q"); if (el) el.focus(); }, 20); return; }
+    UI.modal = null; render(); toast("Producto guardado");
+  }
+
+  // Oportunidad completa
+  function modalOport(M) {
+    const o = M.o; const c = G.campanas[o.campana_id] || {}; const mot = [...new Set([...motivos(), o.motivo].filter(Boolean))];
+    const cartOpc = [...new Set([...(c.carteras || []), ...Object.keys(IDX.cartNom).sort()])].filter((k) => IDX.cartNom[k] && IDX.cartNom[k] !== "(sin asignar)");
+    const P = o.partidas || []; const pzT = P.reduce((s, p) => s + (+p.cantidad || 0), 0); const impT = P.reduce((s, p) => s + importePartida(p), 0);
+    const mon = enUSD(c) ? "USD" : "MXN";
+    const filasP = P.map((p, i) => `<tr><td><b>${esc(p.modelo || "—")}</b> <span class="mono">${esc(p.numero_parte && p.numero_parte !== p.modelo ? p.numero_parte : "")}</span><div class="cod" style="margin:0">${esc([p.marca, p.linea].filter(Boolean).join(" · "))}</div>${p.libre ? `<input class="campo" id="mo-pt-${i}-modelo" data-mpart="${i}" data-campo="modelo" value="${esc(p.modelo || "")}" placeholder="Modelo" style="margin-top:4px">` : ""}</td>
+      <td style="width:90px"><input class="campo n" id="mo-pt-${i}-cantidad" data-mpart="${i}" data-campo="cantidad" inputmode="decimal" value="${esc(p.cantidad ?? "")}" aria-label="Cantidad"></td>
+      <td style="width:120px"><input class="campo n" id="mo-pt-${i}-precio" data-mpart="${i}" data-campo="precio" inputmode="decimal" value="${esc(p.precio ?? "")}" aria-label="Precio unitario"></td>
+      <td style="width:80px"><input class="campo n" id="mo-pt-${i}-descuento" data-mpart="${i}" data-campo="descuento" inputmode="decimal" value="${esc(p.descuento ?? "")}" placeholder="0" aria-label="Descuento %"></td>
+      <td class="n" id="mo-pt-${i}-imp">${dinC(c, importePartida(p))}</td><td><button class="restaurar" type="button" data-mo-quitar="${i}" title="Quitar">✕</button></td></tr>`).join("");
+    const sel = (campo, opciones, valor, etq, extra = "") => `<div><label class="campo-label" for="mo-${campo}">${etq}</label><select class="campo" id="mo-${campo}" data-mo="${campo}" ${extra}>${opciones.map(([v, t]) => `<option value="${esc(v)}" ${String(valor ?? "") === String(v) ? "selected" : ""}>${esc(t)}</option>`).join("")}</select></div>`;
+    return `<div class="modal-cab"><strong id="modal-tit">${M.nuevo ? "Nueva oportunidad" : "Oportunidad"}</strong><span class="cod" style="margin:0">${esc(c.nombre || "")}</span><button class="restaurar" type="button" data-md-cerrar title="Cerrar (Esc)">✕</button></div>
+      <fieldset class="md-sec"><legend>Cliente</legend><div class="form-grid">
+        ${sel("cartera", [["", "— Sin cartera —"], ...cartOpc.map((k) => [k, `${k} ${IDX.cartNom[k]}`])], o.cartera, "Cartera")}
+        <div class="ancho2"><label class="campo-label" for="mo-cliente">Cliente *</label><input class="campo" id="mo-cliente" data-mo="cliente" list="lista-clientes-m" value="${esc(o.cliente || "")}" required autocomplete="off"><datalist id="lista-clientes-m">${(M.clientes || []).map((x) => `<option value="${esc(x)}">`).join("")}</datalist></div>
+        ${campoM("mo", "contacto", "Contacto (nombre, puesto, correo o teléfono)", o.contacto)}
+        ${sel("origen", [["", "—"], ...ORIGENES.map((x) => [x, x])], o.origen, "Origen")}</div></fieldset>
+      <fieldset class="md-sec"><legend>Oportunidad</legend><div class="form-grid">
+        ${campoM("mo", "oportunidad", "Nombre o folio de la oportunidad", o.oportunidad, 'placeholder="Ej. Línea 3 empaque"')}
+        ${campoM("mo", "cotizacion", "Cotización (folio Odoo)", o.cotizacion, 'placeholder="S37111"')}
+        ${sel("etapa", [["", "—"], ...ETAPAS.map(([k, n, p]) => [k, `${n} (${p}%)`])], o.etapa, "Etapa", o.estado !== "abierta" ? "disabled" : "")}
+        ${campoM("mo", "probabilidad", "Probabilidad de cierre (%)", o.probabilidad, `inputmode="numeric" ${o.estado !== "abierta" ? "disabled" : ""}`)}
+        ${campoM("mo", "fecha_alta", "Fecha de alta", o.fecha_alta, "", "date")}
+        ${campoM("mo", "fecha_estimada", "Cierre estimado", o.fecha_estimada, "", "date")}</div></fieldset>
+      <fieldset class="md-sec"><legend>Productos y cantidades</legend>
+        <div class="form-grid">${(c.productos || []).length ? `<div><label class="campo-label" for="mo-addprod">Agregar producto de la campaña</label><select class="campo" id="mo-addprod" data-mo-addprod><option value="">Elegir…</option>${c.productos.map((p, i) => `<option value="${i}">${esc(p.modelo)}${p.numero_parte && p.numero_parte !== p.modelo ? " · " + esc(p.numero_parte) : ""}${fin(numC(p.precio)) ? " · " + dinC(c, +p.precio) : ""}</option>`).join("")}</select></div>` : ""}
+          <div class="ancho2"><label class="campo-label" for="mo-q">Buscar otro producto en el catálogo</label><input class="campo" id="mo-q" type="search" data-mo-q value="${esc(M.q || "")}" placeholder="Modelo, número de parte o descripción" autocomplete="off">${resultadosCat(M.res, "data-mo-elegir", c)}</div>
+          <div style="align-self:end"><button class="btn chico" type="button" data-mo-libre>+ Partida sin catálogo</button></div></div>
+        ${P.length ? `<div class="tabla-wrap" style="max-height:none;margin-top:8px"><table class="t tabla-partidas"><thead><tr><th>Producto</th><th class="n">Cantidad</th><th class="n">Precio unit. (${mon})</th><th class="n">Desc. %</th><th class="n">Importe</th><th></th></tr></thead><tbody>${filasP}</tbody>
+          <tfoot><tr><td><b>Total</b></td><td class="n" id="mo-tot-pz"><b>${pzT.toLocaleString("es-MX")} pz</b></td><td></td><td></td><td class="n" id="mo-tot-imp"><b>${dinC(c, impT)}</b></td><td></td></tr></tfoot></table></div>`
+          : `<div class="form-grid" style="margin-top:8px">${campoM("mo", "modelo", "Modelo (texto)", o.modelo)}${campoM("mo", "cantidad", "Cantidad (pz)", o.cantidad, 'inputmode="decimal"')}<p class="nota-pie ancho2" style="align-self:end">Agrega productos para calcular piezas e importe por partida; si no, captura el modelo, las piezas y el monto.</p></div>`}
+        <div class="form-grid" style="margin-top:8px">${campoM("mo", "monto", `Monto cotizado (${mon}, sin IVA)`, P.length ? r2c(impT) : o.monto, `inputmode="decimal" ${P.length ? 'readonly title="Se calcula con las partidas"' : ""}`)}</div></fieldset>
+      <fieldset class="md-sec"><legend>Resultado</legend><div class="form-grid">
+        ${sel("estado", Object.entries(ESTADO_OP).map(([v, [t]]) => [v, t]), o.estado, "Estado")}
+        ${o.estado !== "abierta" ? campoM("mo", "fecha_cierre", "Fecha de cierre", o.fecha_cierre, "", "date") : ""}
+        ${o.estado === "perdida" ? `${sel("motivo", [["", "Elegir motivo…"], ...mot.map((x) => [x, x])], o.motivo, "Motivo de pérdida *")}${campoM("mo", "competidor", "Competidor que ganó", o.competidor)}` : ""}
+        ${o.estado === "ganada" && o.venta && o.venta.length ? `<div class="ancho2 nota-pie" style="align-self:end">Facturado según el reporte: ${o.venta.map((p) => `${esc(p.modelo)} × ${p.cantidad}`).join(", ")} (${o.venta.reduce((s2, p) => s2 + (+p.cantidad || 0), 0)} pz)</div>` : ""}
+        ${o.estado === "ganada" ? `${campoM("mo", "factura", "Factura", o.factura, 'placeholder="INV/2026/…"')}${campoM("mo", "fecha_factura", "Fecha de factura", o.fecha_factura, "", "date")}${campoM("mo", "monto_facturado", `Monto facturado (${mon})`, o.monto_facturado, 'inputmode="decimal"')}` : ""}</div></fieldset>
+      <fieldset class="md-sec"><legend>Notas</legend><div class="form-grid"><div class="ancho2"><label class="campo-label" for="mo-detalle">Comentarios (se ven en la tabla)</label><textarea class="campo" id="mo-detalle" data-mo="detalle" rows="2">${esc(o.detalle || "")}</textarea></div><div class="ancho2"><label class="campo-label" for="mo-notas">Seguimiento / notas internas</label><textarea class="campo" id="mo-notas" data-mo="notas" rows="2">${esc(o.notas || "")}</textarea></div></div></fieldset>
+      <div class="modal-pie"><span class="nota-pie" style="margin:0">* obligatorio</span><span style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" type="button" data-md-cerrar>Cancelar</button>${M.nuevo ? `<button class="btn" type="button" data-mo-guardar="otra">Guardar y agregar otra</button>` : ""}<button class="btn prim" type="button" data-mo-guardar="cerrar">Guardar oportunidad</button></span></div>`;
+  }
+  function plantillaOport(cid) {
+    const c = G.campanas[cid];
+    return { id: nuevoId(), campana_id: cid, cartera: c.carteras.length === 1 ? c.carteras[0] : "", cliente: "", contacto: "", origen: c.tipo === "inbound" ? "Inbound" : "Outbound", oportunidad: "", cotizacion: "", etapa: "prospeccion", probabilidad: 10, fecha_alta: hoyIso(), fecha_estimada: "", marca: c.marca || "", modelo: "", numero_parte: "", linea: "", cantidad: null, partidas: [], monto: 0, estado: "abierta", motivo: "", competidor: "", fecha_cierre: "", factura: "", fecha_factura: "", monto_facturado: null, detalle: "", notas: "" };
+  }
+  function abrirOport(cid, id) {
+    const o = id ? JSON.parse(JSON.stringify(G.oport[id])) : plantillaOport(cid);
+    o.partidas = (o.partidas || []).map((p) => ({ ...p })); o.monto = o.monto ?? 0;
+    UI.modal = { tipo: "oport", nuevo: !id, o, q: "", res: [], clientes: clientesConocidos() };
+    render(); setTimeout(() => { const el = $(id ? "#mo-cliente" : "#mo-cartera"); if (el) el.focus(); }, 20);
+  }
+  function agregarPartida(p, c) {
+    const o = UI.modal.o; const precio = numC(p.precio);
+    const k = claveProd(p); const j = o.partidas.findIndex((x) => claveProd(x) === k && k);
+    if (j >= 0) { o.partidas[j].cantidad = (+o.partidas[j].cantidad || 0) + 1; toast("Ese producto ya estaba: se sumó una pieza."); }
+    else o.partidas.push({ pid: p.id || "", numero_parte: p.numero_parte || "", modelo: p.modelo || "", marca: p.marca || "", linea: p.linea || "", descripcion: p.descripcion || "", cantidad: 1, precio: precio ?? "", descuento: "" });
+    if (!o.marca && p.marca) o.marca = p.marca;
+    UI.modal.q = ""; UI.modal.res = []; renderModal();
+    const i = j >= 0 ? j : o.partidas.length - 1; const el = $(`#mo-pt-${i}-cantidad`); if (el) { el.focus(); el.select && el.select(); }
+  }
+  function totalesPartidas() {
+    const M = UI.modal, o = M.o, c = G.campanas[o.campana_id];
+    o.partidas.forEach((p, i) => { const el = $(`#mo-pt-${i}-imp`); if (el) el.textContent = dinC(c, importePartida(p)); });
+    const pz = o.partidas.reduce((s, p) => s + (+p.cantidad || 0), 0), imp = o.partidas.reduce((s, p) => s + importePartida(p), 0);
+    const a = $("#mo-tot-pz"), b = $("#mo-tot-imp"), m = $("#mo-monto");
+    if (a) a.innerHTML = `<b>${pz.toLocaleString("es-MX")} pz</b>`; if (b) b.innerHTML = `<b>${dinC(c, imp)}</b>`; if (m) m.value = r2c(imp);
+  }
+  function guardarOport(modo) {
+    const M = UI.modal, o = M.o; const c = G.campanas[o.campana_id];
+    o.cliente = String(o.cliente || "").trim().toUpperCase();
+    if (!o.cliente) { toast("Escribe el cliente."); const el = $("#mo-cliente"); if (el) el.focus(); return; }
+    if (o.estado === "perdida" && !o.motivo) { toast("Elige el motivo de pérdida."); const el = $("#mo-motivo"); if (el) el.focus(); return; }
+    o.partidas = (o.partidas || []).filter((p) => p.modelo || p.numero_parte).map((p) => ({ ...p, cantidad: numC(p.cantidad) || 0, precio: numC(p.precio), descuento: numC(p.descuento), importe: importePartida(p) }));
+    if (o.partidas.length) {
+      o.monto = r2c(o.partidas.reduce((s, p) => s + p.importe, 0)); o.cantidad = o.partidas.reduce((s, p) => s + p.cantidad, 0);
+      o.modelo = [...new Set(o.partidas.map((p) => p.modelo))].join(", ").slice(0, 200); o.numero_parte = o.partidas[0].numero_parte || ""; o.linea = o.partidas[0].linea || "";
+      o.marca = [...new Set(o.partidas.map((p) => p.marca).filter(Boolean))].join(", ") || o.marca || (c && c.marca) || "";
+    } else { o.monto = numC(o.monto) || 0; o.cantidad = numC(o.cantidad); }
+    o.monto_facturado = numC(o.monto_facturado); o.probabilidad = o.estado === "ganada" ? 100 : o.estado === "perdida" ? 0 : numC(o.probabilidad);
+    if (o.estado !== "abierta" && !o.fecha_cierre) o.fecha_cierre = hoyIso();
+    if (o.estado === "abierta") o.fecha_cierre = "";
+    if (o.estado !== "perdida") { o.motivo = ""; }
+    if (o.fecha_cierre && o.fecha_alta && o.fecha_cierre < o.fecha_alta) { toast("La fecha de cierre es anterior a la de alta."); return; }
+    G.oport[o.id] = o; guardar();
+    if (modo === "otra") { const n = plantillaOport(o.campana_id); n.cartera = o.cartera; n.origen = o.origen; UI.modal = { tipo: "oport", nuevo: true, o: n, q: "", res: [], clientes: M.clientes }; render(); toast("Oportunidad guardada; captura la siguiente."); setTimeout(() => { const el = $("#mo-cliente"); if (el) el.focus(); }, 20); return; }
+    UI.modal = null; render(); toast("Oportunidad guardada");
+  }
+
+  /* ------------------------------------------- reporte de campaña (Excel) */
+  const CAMPOS_ETQ = { orden: "Folio de cotización", fecha: "Fecha", cartera: "Cartera", vendedor: "Vendedor", cliente: "Cliente", producto: "Producto", cantidad: "Cantidad", precio: "Precio unitario", subtotal_usd: "Importe en USD", subtotal: "Importe (MXN)", tc: "Tipo de cambio", factura: "Factura", importe: "Importe" };
+  async function leerArchivoCampana(f) {
+    try {
+      toast("Leyendo el reporte…");
+      await cargarSheetJS();
+      const wb = XLSX.read(await f.arrayBuffer(), { type: "array", cellDates: true, sheetRows: 20000 });
+      const R = ISELParser.leerReporteCampana(ISELParser.libroDeSheetJS(wb));
+      if (!R || !R.tablas.length) { toast("No encontré tablas de cotizaciones o ventas en el archivo (se buscan columnas como Cliente, Producto, Cantidad y Fecha)."); return; }
+      abrirReporte(R, f.name);
+    } catch (e) { console.error(e); toast("No se pudo leer el archivo: " + e.message); }
+  }
+  function abrirReporte(R, archivo) {
+    const destino = UI.campSel && G.campanas[UI.campSel] ? UI.campSel : campanasLista().length ? campanasLista()[0].id : "nueva";
+    const M = { tipo: "reporte", R, archivo, destino, usar: R.tablas.map(() => true), mapas: [], usarObj: !!R.objetivos, moneda: "", paridad: "" };
+    prepararReporte(M); UI.modal = M; UI.tab = "campanas"; render();
+  }
+  // Mapeo por tabla: el guardado en la campaña (por nombre de encabezado) o el automático
+  function prepararReporte(M) {
+    const c = G.campanas[M.destino]; const guard = ajustes(c).reporte && ajustes(c).reporte.mapas;
+    M.mapas = M.R.tablas.map((t) => {
+      const m = { ...t.mapa };
+      const g = guard && guard[t.tipo];
+      if (g) for (const [campo, enc] of Object.entries(g)) { const j = t.encabezados.findIndex((h) => ISELParser.norm(h) === ISELParser.norm(enc)); if (j >= 0) m[campo] = j; else if (enc === "") delete m[campo]; }
+      return m;
+    });
+    const usd = M.R.moneda === "USD" || M.R.tablas.some((t, i) => M.mapas[i].subtotal_usd !== undefined);
+    M.moneda = c && ajustes(c).moneda ? ajustes(c).moneda : usd ? "USD" : "MXN";
+    M.paridad = (c && ajustes(c).paridad) || M.R.paridad || "";
+  }
+  function campanaDesdeReporte(M) {
+    const R = M.R; const fechas = [];
+    for (const [i, t] of R.tablas.entries()) if (M.usar[i] && M.mapas[i].fecha !== undefined) for (const r of t.filas) { const f = fechaCelda(r[M.mapas[i].fecha]); if (f) fechas.push(f); }
+    fechas.sort();
+    return { id: nuevoId(), nombre: R.titulo ? `Campaña ${R.titulo}` : M.archivo.replace(/\.[^.]+$/, ""), tipo: "outbound", estado: "activa", inicio: fechas[0] || hoyIso(), fin: "", marca: "", modelos: "", carteras: [], objetivo: "", metas: {}, notas: "", productos: [], ajustes: {} };
+  }
+  // Calcula lo que haría la importación sin tocar los datos; aplicar=true lo guarda
+  function planReporte(M, aplicar) {
+    const R = M.R; const nueva = M.destino === "nueva";
+    const c = JSON.parse(JSON.stringify(nueva ? M.cNueva || (M.cNueva = campanaDesdeReporte(M)) : G.campanas[M.destino]));
+    c.ajustes = c.ajustes || {}; c.productos = c.productos || []; c.metas = c.metas || {};
+    c.ajustes.moneda = M.moneda; const par = numC(M.paridad) || numC(c.ajustes.paridad) || R.paridad || 17.5; c.ajustes.paridad = par;
+    const usd = M.moneda === "USD";
+    const ops = new Map(opsDe(c.id).map((o) => [o.id, JSON.parse(JSON.stringify(o))]));
+    const st = { cotFilas: 0, cotNuevas: 0, cotAct: 0, venFilas: 0, venLigadas: 0, venNuevas: 0, venYa: 0, prodNuevos: 0, omitidas: 0, pzCot: 0, pzVen: 0, carteras: new Set() };
+    const val = (r, m, campo) => (m[campo] === undefined ? undefined : r[m[campo]]);
+    const cartDe = (r, m, cli) => carteraDeTexto(val(r, m, "cartera")) || carteraDeTexto(val(r, m, "vendedor")) || (G.cliCart && G.cliCart[cli]) || "";
+    const nCli = (s) => ISELParser.normCliente(s);
+    const prodKeys = new Set(c.productos.map(claveProd));
+    const sumarProd = (p) => { const k = claveProd(p); if (k && !prodKeys.has(k)) { prodKeys.add(k); st.prodNuevos++; c.productos.push({ id: nuevoId(), numero_parte: p.numero_parte, modelo: p.modelo, marca: p.marca, linea: p.linea, descripcion: p.descripcion, precio: p.precioLista ?? null, unidad: "pz" }); } };
+    // 1) Cotizaciones: una oportunidad por folio
+    const precios = [];
+    R.tablas.forEach((t, ti) => {
+      if (!M.usar[ti] || t.tipo !== "cotizaciones") return; const m = M.mapas[ti];
+      const grupos = new Map();
+      for (const r of t.filas) {
+        const cli = nCli(val(r, m, "cliente")); const prodTxt = val(r, m, "producto"); const cant = numC(val(r, m, "cantidad"));
+        if (!cli || !prodTxt || !cant) { st.omitidas++; continue; }
+        st.cotFilas++;
+        const fecha = fechaCelda(val(r, m, "fecha"));
+        const folio = String(val(r, m, "orden") ?? "").trim() || `${cli}|${fecha}`;
+        const tc = numC(val(r, m, "tc")); const sub = numC(val(r, m, "subtotal")), subU = numC(val(r, m, "subtotal_usd")), pu = numC(val(r, m, "precio"));
+        let imp = usd ? (subU ?? (sub !== null ? sub / (tc > 1 ? tc : par) : null)) : (sub ?? (subU !== null ? subU * (tc > 1 ? tc : par) : null));
+        if (imp === null && pu !== null) imp = pu * cant;
+        imp = r2c(imp || 0);
+        const pp = ISELParser.partesProducto(prodTxt);
+        const g = grupos.get(folio) || { folio, cli, cliTxt: String(val(r, m, "cliente")).trim(), fecha, cart: cartDe(r, m, cli), partidas: [] };
+        if (fecha && (!g.fecha || fecha < g.fecha)) g.fecha = fecha;
+        g.partidas.push({ ...pp, cantidad: cant, precio: r2c(imp / cant), descuento: null, importe: imp }); precios.push(imp / cant);
+        grupos.set(folio, g);
+      }
+      for (const g of grupos.values()) {
+        if (g.cart) st.carteras.add(g.cart);
+        g.partidas.forEach(sumarProd);
+        const ex = [...ops.values()].find((o) => o.cotizacion && o.cotizacion === g.folio);
+        const monto = r2c(g.partidas.reduce((s, p) => s + p.importe, 0)), cantidad = g.partidas.reduce((s, p) => s + p.cantidad, 0);
+        st.pzCot += cantidad;
+        const datos = { cliente: g.cli, cartera: g.cart || (ex && ex.cartera) || "", partidas: g.partidas, monto, cantidad, fecha_alta: g.fecha || (ex && ex.fecha_alta) || hoyIso(), modelo: [...new Set(g.partidas.map((p) => p.modelo))].join(", "), numero_parte: g.partidas[0].numero_parte, linea: g.partidas[0].linea, marca: [...new Set(g.partidas.map((p) => p.marca).filter(Boolean))].join(", ") };
+        if (ex) { Object.assign(ex, datos); st.cotAct++; }
+        else { const o = { ...plantillaOportC(c), ...datos, cotizacion: g.folio, oportunidad: g.folio, etapa: "propuesta", probabilidad: 50, origen: "Reporte de campaña" }; ops.set(o.id, o); st.cotNuevas++; }
+      }
+    });
+    // Precio de referencia por pieza (para reconocer importes de venta en la otra moneda)
+    precios.sort((a, b) => a - b);
+    const ref = precios.length ? precios[Math.floor(precios.length / 2)] : R.precio ? (R.moneda === "USD" ? (usd ? R.precio : R.precio * par) : usd ? R.precio / par : R.precio) : null;
+    // 2) Ventas: se ligan a la cotización del mismo cliente o se registran como ganadas
+    R.tablas.forEach((t, ti) => {
+      if (!M.usar[ti] || t.tipo !== "ventas") return; const m = M.mapas[ti];
+      const grupos = new Map();
+      for (const r of t.filas) {
+        const cli = nCli(val(r, m, "cliente")); const prodTxt = val(r, m, "producto"); const cant = numC(val(r, m, "cantidad"));
+        if (!cli || !prodTxt || !cant) { st.omitidas++; continue; }
+        st.venFilas++;
+        const fecha = fechaCelda(val(r, m, "fecha")); const fac = String(val(r, m, "factura") ?? "").trim().replace(/\s*\(.*\)\s*$/, "") || `${cli}|${fecha}`;
+        let imp = numC(val(r, m, "importe")) || 0; const u = imp / cant;
+        if (ref) { if (usd && u > ref * 4) imp = imp / par; else if (!usd && u < ref / 4) imp = imp * par; }
+        const pp = ISELParser.partesProducto(prodTxt);
+        const g = grupos.get(fac) || { fac, cli, fecha, cart: cartDe(r, m, cli), partidas: [] };
+        g.partidas.push({ ...pp, cantidad: cant, precio: r2c(imp / cant), descuento: null, importe: r2c(imp) });
+        grupos.set(fac, g);
+      }
+      for (const g of [...grupos.values()].sort((a, b) => (a.fecha || "").localeCompare(b.fecha || ""))) {
+        if (g.cart) st.carteras.add(g.cart);
+        g.partidas.forEach(sumarProd);
+        const total = r2c(g.partidas.reduce((s, p) => s + p.importe, 0)), cant = g.partidas.reduce((s, p) => s + p.cantidad, 0);
+        st.pzVen += cant;
+        const ya = [...ops.values()].find((o) => o.factura === g.fac);
+        if (ya) { ya.monto_facturado = total; ya.fecha_factura = g.fecha || ya.fecha_factura; ya.venta = g.partidas; st.venYa++; continue; }
+        const mods = new Set(g.partidas.map(claveProd));
+        const cand = [...ops.values()].filter((o) => nCli(o.cliente) === g.cli && o.estado !== "perdida" && !o.factura && (!o.fecha_alta || !g.fecha || o.fecha_alta <= g.fecha))
+          .sort((a, b) => (partidasDe(b).some((p) => mods.has(claveProd(p))) - partidasDe(a).some((p) => mods.has(claveProd(p)))) || ((a.estado === "abierta") === (b.estado === "abierta") ? 0 : a.estado === "abierta" ? -1 : 1) || (b.fecha_alta || "").localeCompare(a.fecha_alta || ""));
+        const o = cand[0];
+        if (o) { Object.assign(o, { estado: "ganada", probabilidad: 100, fecha_cierre: g.fecha || hoyIso(), factura: g.fac, fecha_factura: g.fecha, monto_facturado: total, venta: g.partidas }); if (!o.cartera && g.cart) o.cartera = g.cart; st.venLigadas++; }
+        else {
+          const n = { ...plantillaOportC(c), cliente: g.cli, cartera: g.cart, partidas: [], venta: g.partidas, monto: total, cantidad: null, modelo: [...new Set(g.partidas.map((p) => p.modelo))].join(", "), numero_parte: g.partidas[0].numero_parte, linea: g.partidas[0].linea, marca: [...new Set(g.partidas.map((p) => p.marca).filter(Boolean))].join(", "),
+            estado: "ganada", etapa: "", probabilidad: 100, fecha_alta: g.fecha || hoyIso(), fecha_cierre: g.fecha || hoyIso(), factura: g.fac, oportunidad: g.fac, fecha_factura: g.fecha, monto_facturado: total, origen: "Reporte de campaña", detalle: "Venta registrada desde el reporte (sin cotización ligada)" };
+          ops.set(n.id, n); st.venNuevas++;
+        }
+      }
+    });
+    // 3) Objetivos por cartera y datos del reporte
+    if (M.usarObj && R.objetivos) {
+      c.ajustes.metasCartera = { ...R.objetivos.porCartera }; c.ajustes.metaCartMetrica = R.objetivos.metrica;
+      c.metas[R.objetivos.metrica] = R.objetivos.total; if (!c.metas.principal || !(+c.metas[c.metas.principal] > 0) || nueva) c.metas.principal = R.objetivos.metrica;
+      Object.keys(R.objetivos.porCartera).forEach((k) => st.carteras.add(k));
+    }
+    c.carteras = [...new Set([...c.carteras, ...[...st.carteras].filter((k) => IDX.cartNom[k])])].sort();
+    if (!c.marca) { const mm = {}; for (const p of c.productos) if (p.marca) mm[p.marca] = (mm[p.marca] || 0) + 1; c.marca = Object.entries(mm).sort((a, b) => b[1] - a[1]).map((x) => x[0])[0] || ""; }
+    const conv = (v, mon) => (v === null || v === undefined ? null : mon === "USD" ? (usd ? v : v * par) : usd ? v / par : v);
+    c.ajustes.reporte = { archivo: M.archivo, fecha: new Date().toISOString(), inversion: R.inversion ? conv(R.inversion, R.moneda || "USD") : (c.ajustes.reporte || {}).inversion || null, precio: R.precio ? r2c(conv(R.precio, R.moneda || "USD")) : (c.ajustes.reporte || {}).precio || null,
+      inversionNota: R.inversion ? `${R.moneda === "USD" ? "US$" : "$"}${R.inversion.toLocaleString("es-MX")} según el reporte` : "", precioNota: R.precio ? `${R.precio} ${R.moneda || ""} en el reporte` : "",
+      mapas: Object.fromEntries(R.tablas.map((t, i) => [t.tipo, Object.fromEntries(Object.keys(ISELParser.CAMPOS_CAMP[t.tipo]).map((campo) => [campo, M.mapas[i][campo] === undefined ? "" : t.encabezados[M.mapas[i][campo]]]))])) };
+    if (!aplicar) return { c, st, ops };
+    G.campanas[c.id] = c; for (const [id, o] of ops) G.oport[id] = o;
+    return { c, st, ops };
+  }
+  function plantillaOportC(c) { return { id: nuevoId(), campana_id: c.id, cartera: "", cliente: "", contacto: "", origen: "", oportunidad: "", cotizacion: "", etapa: "", probabilidad: null, fecha_alta: hoyIso(), fecha_estimada: "", marca: c.marca || "", modelo: "", numero_parte: "", linea: "", cantidad: null, partidas: [], monto: 0, estado: "abierta", motivo: "", competidor: "", fecha_cierre: "", factura: "", fecha_factura: "", monto_facturado: null, detalle: "", notas: "", venta: [] }; }
+  function modalReporte(M) {
+    const R = M.R; let P = null, err = "";
+    try { P = planReporte(M, false); } catch (e) { console.error(e); err = e.message; }
+    const st = P ? P.st : null;
+    const tablas = R.tablas.map((t, i) => { const m = M.mapas[i]; const campos = Object.keys(ISELParser.CAMPOS_CAMP[t.tipo]);
+      return `<fieldset class="md-sec"><legend><label style="display:inline-flex;gap:6px;align-items:center"><input type="checkbox" data-mr-usar="${i}" ${M.usar[i] ? "checked" : ""}> Hoja «${esc(t.hoja)}» · ${t.tipo === "cotizaciones" ? "cotizaciones" : "ventas / facturas"} · ${t.filas.length} renglones</label></legend>
+        ${M.usar[i] ? `<div class="form-grid mapa">${campos.map((campo) => `<div><label class="campo-label" for="mr-${i}-${campo}">${CAMPOS_ETQ[campo] || campo}${["cliente", "producto", "cantidad", "fecha"].includes(campo) ? " *" : ""}</label><select class="campo" id="mr-${i}-${campo}" data-mr-tabla="${i}" data-campo="${campo}"><option value="">(no usar)</option>${t.encabezados.map((h, j) => h ? `<option value="${j}" ${m[campo] === j ? "selected" : ""}>${esc(h)}</option>` : "").join("")}</select></div>`).join("")}</div>` : ""}</fieldset>`; }).join("");
+    const opcDest = [["nueva", "Nueva campaña con este reporte"], ...campanasLista().map((c) => [c.id, c.nombre])];
+    return `<div class="modal-cab"><strong id="modal-tit">Cargar reporte de campaña</strong><span class="cod" style="margin:0">${esc(M.archivo)}</span><button class="restaurar" type="button" data-md-cerrar title="Cerrar (Esc)">✕</button></div>
+      <p class="nota-pie" style="margin:0">Las columnas se reconocen por su encabezado. Si el formato del archivo cambia, ajusta aquí qué columna corresponde a cada dato: la campaña recuerda la elección para la siguiente carga. Volver a cargar el reporte actualiza las cotizaciones por folio y no duplica las facturas.</p>
+      <div class="form-grid"><div class="ancho2"><label class="campo-label" for="mr-destino">Campaña</label><select class="campo" id="mr-destino" data-mr="destino">${opcDest.map(([v, t]) => `<option value="${esc(v)}" ${M.destino === v ? "selected" : ""}>${esc(t)}</option>`).join("")}</select></div>
+        <div><label class="campo-label" for="mr-moneda">Moneda de los importes</label><select class="campo" id="mr-moneda" data-mr="moneda"><option value="USD" ${M.moneda === "USD" ? "selected" : ""}>Dólares (USD)</option><option value="MXN" ${M.moneda === "MXN" ? "selected" : ""}>Pesos (MXN)</option></select></div>
+        <div><label class="campo-label" for="mr-paridad">Paridad (MXN por USD)</label><input class="campo" id="mr-paridad" data-mr="paridad" inputmode="decimal" value="${esc(M.paridad)}" placeholder="17.5"></div></div>
+      ${R.titulo || R.inversion || R.precio ? `<div class="aviso info" style="margin:0">Datos del reporte: ${[R.titulo ? `campaña <b>${esc(R.titulo)}</b>` : "", R.inversion ? `inversión <b>${R.inversion.toLocaleString("es-MX")} ${esc(R.moneda || "")}</b>` : "", R.precio ? `precio de campaña <b>${R.precio} ${esc(R.moneda || "")}</b>` : "", R.paridad ? `paridad <b>${R.paridad}</b>` : ""].filter(Boolean).join(" · ")}</div>` : ""}
+      ${tablas}
+      ${R.objetivos ? `<label style="display:flex;gap:8px;align-items:flex-start;font-size:14px"><input type="checkbox" data-mr-obj ${M.usarObj ? "checked" : ""}> <span>Usar los objetivos de la hoja «${esc(R.objetivos.hoja)}»: <b>${R.objetivos.total.toLocaleString("es-MX")} ${MET[R.objetivos.metrica].u === "pz" ? "pz" : ""}</b> de ${esc(MET[R.objetivos.metrica].n.toLowerCase())} repartidos en ${Object.keys(R.objetivos.porCartera).length} carteras (${Object.entries(R.objetivos.porCartera).map(([k, v]) => `${k}: ${v}`).join(", ")}).</span></label>` : ""}
+      ${err ? `<div class="aviso">No se pudo preparar la importación: ${esc(err)}</div>` : st ? `<div class="tira tira-auto" style="margin:0"><div class="celda"><label>Cotizaciones</label><div class="valor">${st.cotNuevas + st.cotAct}</div><small>${st.cotNuevas} nuevas · ${st.cotAct} actualizadas · ${st.pzCot} pz</small></div>
+        <div class="celda"><label>Ventas</label><div class="valor pos">${st.venLigadas + st.venNuevas + st.venYa}</div><small>${st.venLigadas} ligadas a una cotización · ${st.venNuevas} sin cotización · ${st.venYa} ya registradas · ${st.pzVen} pz</small></div>
+        <div class="celda"><label>Productos nuevos</label><div class="valor">${st.prodNuevos}</div><small>se agregan a la campaña</small></div>
+        <div class="celda"><label>Carteras</label><div class="valor">${P.c.carteras.length}</div><small>${st.omitidas ? `${st.omitidas} renglones omitidos sin cliente, producto o cantidad` : "participan en la campaña"}</small></div></div>` : ""}
+      <div class="modal-pie"><span class="nota-pie" style="margin:0">Las oportunidades importadas se pueden editar después (etapa, motivo de pérdida, notas).</span><span style="display:flex;gap:8px"><button class="btn" type="button" data-md-cerrar>Cancelar</button><button class="btn prim" type="button" data-mr-importar ${err ? "disabled" : ""}>Importar</button></span></div>`;
+  }
 
   /* --------------------------------------------- eventos de campañas */
   function guardarCampana() {
@@ -1917,47 +2335,105 @@
     if (!c.nombre.trim()) { toast("Escribe el nombre de la campaña."); $("#cf-nombre").focus(); return; }
     if (c.inicio && c.fin && c.fin < c.inicio) { toast("La fecha de fin es anterior al inicio."); return; }
     for (const k of Object.keys(c.metas)) if (k !== "principal" && (c.metas[k] === "" || !fin(+c.metas[k]))) delete c.metas[k]; else if (k !== "principal") c.metas[k] = +c.metas[k];
+    const A = c.ajustes || (c.ajustes = {});
+    A.paridad = numC(A.paridad) || null; if (!A.paridad) delete A.paridad;
+    if (A.metasCartera) { for (const k of Object.keys(A.metasCartera)) { const v = numC(A.metasCartera[k]); if (v === null || !c.carteras.includes(k)) delete A.metasCartera[k]; else A.metasCartera[k] = v; } if (!Object.keys(A.metasCartera).length) { delete A.metasCartera; delete A.metaCartMetrica; } }
+    if (A.extra) { A.extra = A.extra.filter((x) => String(x.n || "").trim()); if (!A.extra.length) delete A.extra; }
     c.nombre = c.nombre.trim();
     G.campanas[c.id] = c; UI.campSel = c.id; UI.campEdit = null; UI.campBorrador = null; guardar(); render(); toast("Campaña guardada");
-  }
-  function nuevaOport(cid) {
-    const c = G.campanas[cid]; const id = crypto.randomUUID ? crypto.randomUUID() : uid();
-    G.oport[id] = { id, campana_id: cid, cartera: c.carteras.length === 1 ? c.carteras[0] : "", cliente: "", oportunidad: "", marca: c.marca || "", modelo: "", monto: 0, estado: "abierta", motivo: "", detalle: "", competidor: "", fecha_alta: hoyIso(), fecha_cierre: "", fecha_factura: "", monto_facturado: null, notas: "" };
-    return id;
-  }
-  function fechaPegada(s) {
-    s = String(s || "").trim(); if (!s) return "";
-    let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); if (m) return `${m[1]}-${m[2]}-${m[3]}`;
-    m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/); if (m) { let a = +m[3]; if (a < 100) a += 2000; return `${a}-${pad(+m[2])}-${pad(+m[1])}`; }
-    return "";
   }
   function importarPegado(cid) {
     const c = G.campanas[cid]; const txt = ($("#op-pegado") || {}).value || "";
     const filas = txt.split(/\r?\n/).map((l) => l.split("\t")).filter((f) => f.join("").trim());
     let n = 0, omit = 0;
     const cat = Object.entries(IDX.cartNom);
-    for (const f of filas) {
-      const [cart, cli, opo, mod, monto, est, mot, fa, fc, ff, mf] = f.map((x) => (x || "").trim());
+    for (const f0 of filas) {
+      const f = f0.map((x) => (x || "").trim());
+      // Formato anterior sin la columna de cantidad (11 columnas)
+      const conCant = f.length >= 12 || (f.length > 5 && /^(abierta|ganada|perdida|open|won|lost)/i.test(f[6] || ""));
+      const [cart, cli, opo, mod, cantTxt, monto, est, mot, fa, fc, ff, mf] = conCant ? f : [f[0], f[1], f[2], f[3], "", ...f.slice(4)];
       if (!cli || /^cliente$/i.test(cli)) { omit++; continue; }
       let k = (cart.match(/^C?\s?(\d{1,2})\b/i) || [])[1]; k = k ? "C" + pad(+k) : (cat.find(([, nn]) => nn && ISELParser.norm(nn).includes(ISELParser.norm(cart))) || [])[0] || "";
       const e = /gan|won/i.test(est) ? "ganada" : /perd|lost/i.test(est) ? "perdida" : "abierta";
-      const id = nuevaOport(cid);
-      Object.assign(G.oport[id], { cartera: k, cliente: cli.toUpperCase(), oportunidad: opo, modelo: mod, monto: +String(monto).replace(/[$,\s]/g, "") || 0, estado: e, motivo: e === "perdida" && mot ? (motivos().find((x) => ISELParser.norm(x).startsWith(ISELParser.norm(mot).slice(0, 6))) || mot) : "", fecha_alta: fechaPegada(fa) || hoyIso(), fecha_cierre: fechaPegada(fc), fecha_factura: fechaPegada(ff), monto_facturado: mf ? +String(mf).replace(/[$,\s]/g, "") || null : null, marca: c.marca || "" });
-      n++;
+      const o = plantillaOport(cid);
+      Object.assign(o, { cartera: k, cliente: cli.toUpperCase(), oportunidad: opo, modelo: mod, cantidad: numC(cantTxt), monto: numC(monto) || 0, estado: e, etapa: e === "abierta" ? "propuesta" : "", probabilidad: e === "abierta" ? 50 : e === "ganada" ? 100 : 0, motivo: e === "perdida" && mot ? (motivos().find((x) => ISELParser.norm(x).startsWith(ISELParser.norm(mot).slice(0, 6))) || mot) : "", fecha_alta: fechaPegada(fa) || hoyIso(), fecha_cierre: fechaPegada(fc), fecha_factura: fechaPegada(ff), monto_facturado: numC(mf), marca: c.marca || "" });
+      const pr = (c.productos || []).find((p) => mod && (ISELParser.norm(p.modelo) === ISELParser.norm(mod) || ISELParser.norm(p.numero_parte) === ISELParser.norm(mod)));
+      if (pr && o.cantidad) o.partidas = [{ pid: pr.id, numero_parte: pr.numero_parte, modelo: pr.modelo, marca: pr.marca, linea: pr.linea, descripcion: pr.descripcion, cantidad: o.cantidad, precio: r2c(o.monto / o.cantidad), descuento: null, importe: o.monto }];
+      if (e !== "abierta" && !o.fecha_cierre) o.fecha_cierre = o.fecha_alta;
+      G.oport[o.id] = o; n++;
     }
     UI.pegar = false; guardar(); render(); toast(`Se agregaron ${n} oportunidades${omit ? ` (${omit} filas omitidas sin cliente)` : ""}.`);
+  }
+  // Eventos de las ventanas: producto, oportunidad y reporte
+  function eventosModal(ev, tipo) {
+    const M = UI.modal; const t = ev.target; const d = t.dataset || {};
+    if (!t.closest || !t.closest("#modal-camp")) return false;
+    if (tipo === "click") {
+      const b = t.closest("button") || t; const bd = b.dataset || {};
+      if ("mdCerrar" in bd) { UI.modal = null; render(); return true; }
+      if (M.tipo === "producto") {
+        if (bd.mpElegir !== undefined) { const p = M.res[+bd.mpElegir]; Object.assign(M.p, { numero_parte: p.numero_parte || "", modelo: p.modelo || "", marca: p.marca || M.p.marca, linea: p.linea || "", descripcion: p.descripcion || "", precio: p.precio ?? "" }); M.q = ""; M.res = []; renderModal(); const el = $("#mp-precio"); if (el) el.focus(); return true; }
+        if (bd.mpGuardar) { guardarProducto(bd.mpGuardar); return true; }
+      }
+      if (M.tipo === "oport") {
+        const c = G.campanas[M.o.campana_id];
+        if (bd.moElegir !== undefined) { agregarPartida(M.res[+bd.moElegir], c); return true; }
+        if ("moLibre" in bd) { M.o.partidas.push({ pid: "", numero_parte: "", modelo: "", marca: c.marca || "", linea: "", descripcion: "", cantidad: 1, precio: "", descuento: "", libre: true }); renderModal(); const el = $(`#mo-pt-${M.o.partidas.length - 1}-modelo`); if (el) el.focus(); return true; }
+        if (bd.moQuitar !== undefined) { M.o.partidas.splice(+bd.moQuitar, 1); renderModal(); return true; }
+        if (bd.moGuardar) { guardarOport(bd.moGuardar); return true; }
+      }
+      if (M.tipo === "reporte" && "mrImportar" in bd) {
+        try { const { c, st } = planReporte(M, true); UI.campSel = c.id; UI.campEdit = null; UI.modal = null; guardar(); render(); toast(`Reporte cargado en «${c.nombre}»: ${st.cotNuevas} cotizaciones nuevas, ${st.cotAct} actualizadas, ${st.venLigadas + st.venNuevas} ventas registradas.`); const s = $("#b-c-detalle"); if (s) s.scrollIntoView(); }
+        catch (e) { console.error(e); toast("No se pudo importar: " + e.message); }
+        return true;
+      }
+      return true;
+    }
+    if (tipo === "input") {
+      if ("mpQ" in d) { M.q = t.value; M.res = buscarCatalogo(t.value, M.cid ? G.campanas[M.cid] : UI.campBorrador); renderModal(); return true; }
+      if (d.mp) { M.p[d.mp] = t.value; return true; }
+      if ("moQ" in d) { M.q = t.value; M.res = buscarCatalogo(t.value, G.campanas[M.o.campana_id]); renderModal(); return true; }
+      if (d.mpart !== undefined) { const p = M.o.partidas[+d.mpart]; if (p) { p[d.campo] = t.value; if (d.campo === "modelo") return true; totalesPartidas(); } return true; }
+      if (d.mo && t.tagName !== "SELECT") { M.o[d.mo] = t.value; return true; }
+      if (d.mr === "paridad") { M.paridad = t.value; return true; }
+      return true;
+    }
+    if (tipo === "change") {
+      if (d.mp && t.tagName === "SELECT") { M.p[d.mp] = t.value; return true; }
+      if ("moAddprod" in d) { if (t.value !== "") agregarPartida(G.campanas[M.o.campana_id].productos[+t.value], G.campanas[M.o.campana_id]); return true; }
+      if (d.mo === "estado") { const o = M.o; o.estado = t.value; if (t.value !== "abierta" && !o.fecha_cierre) o.fecha_cierre = hoyIso(); if (t.value === "abierta") o.fecha_cierre = ""; renderModal(); return true; }
+      if (d.mo === "etapa") { const o = M.o; const ant = ETAPA[o.etapa]; o.etapa = t.value; if (ETAPA[t.value] && (o.probabilidad === null || o.probabilidad === "" || (ant && +o.probabilidad === ant.p))) o.probabilidad = ETAPA[t.value].p; renderModal(); return true; }
+      if (d.mo && t.tagName === "SELECT") { M.o[d.mo] = t.value; return true; }
+      if (d.mo) { M.o[d.mo] = t.value; return true; }
+      if (d.mrUsar !== undefined) { M.usar[+d.mrUsar] = t.checked; renderModal(); return true; }
+      if ("mrObj" in d) { M.usarObj = t.checked; renderModal(); return true; }
+      if (d.mrTabla !== undefined) { const m = M.mapas[+d.mrTabla]; if (t.value === "") delete m[d.campo]; else m[d.campo] = +t.value; renderModal(); return true; }
+      if (d.mr === "destino") { M.destino = t.value; M.cNueva = null; prepararReporte(M); renderModal(); return true; }
+      if (d.mr === "moneda") { M.moneda = t.value; renderModal(); return true; }
+      if (d.mr === "paridad") { M.paridad = t.value; renderModal(); return true; }
+      return true;
+    }
+    return false;
   }
   function eventosCampana(ev, tipo) {
     const t = ev.target, d = t.dataset || {};
     if (tipo === "click") {
+      const sm = t.closest("summary"); if (sm && sm.parentElement.dataset.mcDet !== undefined) { UI.mcAbierto = !sm.parentElement.open; return false; }
       const b = t.closest("button, tr, label") || t; const bd = b.dataset || {};
       if ("campNueva" in bd) { UI.campEdit = "nueva"; UI.campBorrador = null; UI.tab = "campanas"; render(); const s = $("#b-c-detalle"); if (s) s.scrollIntoView(); return true; }
       if (bd.campEditar) { UI.campEdit = bd.campEditar; UI.campBorrador = null; render(); const s = $("#b-c-detalle"); if (s) s.scrollIntoView(); return true; }
       if ("campCancelar" in bd) { UI.campEdit = null; UI.campBorrador = null; render(); return true; }
       if (bd.campVer) { UI.campSel = bd.campVer; UI.campEdit = null; render(); const s = $("#b-c-detalle"); if (s) s.scrollIntoView(); return true; }
       if (bd.campBorrar) { if (UI.borrar === "c" + bd.campBorrar) { for (const o of opsDe(bd.campBorrar)) delete G.oport[o.id]; delete G.campanas[bd.campBorrar]; UI.borrar = null; UI.campSel = null; guardar(); toast("Campaña eliminada"); } else UI.borrar = "c" + bd.campBorrar; render(); return true; }
+      if (bd.campProd) { abrirProducto(bd.campProd, null); return true; }
       if ("cbTodas" in bd) { const c = UI.campBorrador; const todas = Object.entries(IDX.cartNom).filter(([, n]) => n && n !== "(sin asignar)" && !/vacante/i.test(n)).map(([k]) => k); c.carteras = c.carteras.length === todas.length ? [] : todas.sort(); render(); return true; }
-      if (bd.opNueva) { const id = nuevaOport(bd.opNueva); guardar(); render(); setTimeout(() => { const el = document.querySelector(`input[data-op="${id}"][data-campo="cliente"]`); if (el) el.focus(); }, 30); return true; }
+      if ("cbProdNuevo" in bd) { abrirProducto(null, null); return true; }
+      if (bd.cbProdEditar !== undefined) { abrirProducto(null, +bd.cbProdEditar); return true; }
+      if (bd.cbProdBorrar !== undefined) { UI.campBorrador.productos.splice(+bd.cbProdBorrar, 1); render(); return true; }
+      if ("cbXNuevo" in bd) { const A = UI.campBorrador.ajustes || (UI.campBorrador.ajustes = {}); (A.extra = A.extra || []).push({ n: "", u: "", meta: "", v: "" }); render(); return true; }
+      if (bd.cbXBorrar !== undefined) { UI.campBorrador.ajustes.extra.splice(+bd.cbXBorrar, 1); render(); return true; }
+      if (bd.opNueva) { abrirOport(bd.opNueva, null); return true; }
+      if (bd.opEditar) { abrirOport(G.oport[bd.opEditar].campana_id, bd.opEditar); return true; }
       if ("opPegar" in bd) { UI.pegar = !UI.pegar; render(); return true; }
       if (bd.opImportar) { importarPegado(bd.opImportar); return true; }
       if (bd.opBorrar) { if (UI.borrar === "o" + bd.opBorrar) { delete G.oport[bd.opBorrar]; UI.borrar = null; guardar(); } else UI.borrar = "o" + bd.opBorrar; render(); return true; }
@@ -1967,27 +2443,32 @@
     }
     if (tipo === "change") {
       if (t.id === "camp-sel") { UI.campSel = t.value; render(); return true; }
+      if (t.id === "camp-archivo") { const f = t.files && t.files[0]; t.value = ""; if (f) leerArchivoCampana(f); return true; }
       if (d.cbCart !== undefined) { const c = UI.campBorrador; c.carteras = t.checked ? [...new Set([...c.carteras, t.value])].sort() : c.carteras.filter((x) => x !== t.value); render(); return true; }
-      if ("cbPrincipal" in d) { UI.campBorrador.metas.principal = t.value; return true; }
+      if ("cbPrincipal" in d) { UI.campBorrador.metas.principal = t.value; render(); return true; }
+      if (d.cba === "moneda") { (UI.campBorrador.ajustes = UI.campBorrador.ajustes || {}).moneda = t.value; render(); return true; }
       if (d.cb && t.tagName === "SELECT") { UI.campBorrador[d.cb] = t.value; return true; }
-      if (d.op && (t.tagName === "SELECT" || t.type === "date")) {
+      if (d.op && t.tagName === "SELECT") {
         const o = G.oport[d.op]; if (!o) return true; o[d.campo] = t.value;
-        if (d.campo === "estado") { if (t.value !== "abierta" && !o.fecha_cierre) o.fecha_cierre = hoyIso(); if (t.value !== "perdida") o.motivo = ""; if (t.value === "abierta") o.fecha_cierre = ""; }
+        if (d.campo === "estado") { if (t.value !== "abierta" && !o.fecha_cierre) o.fecha_cierre = hoyIso(); if (t.value !== "perdida") o.motivo = ""; if (t.value === "abierta") o.fecha_cierre = ""; o.probabilidad = t.value === "ganada" ? 100 : t.value === "perdida" ? 0 : ETAPA[o.etapa] ? ETAPA[o.etapa].p : null; }
         guardar(); render(); return true;
       }
-      if (d.op) { const o = G.oport[d.op]; if (!o) return true; o[d.campo] = d.campo === "monto" || d.campo === "monto_facturado" ? (t.value.trim() === "" ? (d.campo === "monto" ? 0 : null) : +t.value.replace(/[$,\s]/g, "") || 0) : d.campo === "cliente" ? t.value.trim().toUpperCase() : t.value; guardar(); render(); return true; }
       if (d.motivo !== undefined) { const L = [...motivos()]; L[+d.motivo] = t.value.trim() || L[+d.motivo]; G.config.motivos = L; guardar(); render(); return true; }
       return false;
     }
     if (tipo === "input") {
       if (d.cb) { UI.campBorrador[d.cb] = t.value; return true; }
+      if (d.cba) { (UI.campBorrador.ajustes = UI.campBorrador.ajustes || {})[d.cba] = t.value; return true; }
       if (d.cbMeta) { UI.campBorrador.metas[d.cbMeta] = t.value.replace(/[$,\s]/g, ""); return true; }
+      if (d.cbMc) { const A = UI.campBorrador.ajustes || (UI.campBorrador.ajustes = {}); A.metasCartera = A.metasCartera || {}; A.metaCartMetrica = principal(UI.campBorrador); if (t.value.trim() === "") delete A.metasCartera[d.cbMc]; else A.metasCartera[d.cbMc] = t.value.replace(/[$,\s]/g, ""); return true; }
+      if (d.cbX !== undefined) { UI.campBorrador.ajustes.extra[+d.cbX][d.campo] = t.value; return true; }
       return false;
     }
     if (tipo === "submit" && t.id === "f-campana") { ev.preventDefault(); guardarCampana(); return true; }
     return false;
   }
   document.addEventListener("submit", (ev) => { if (UI.tab === "campanas" || UI.foco) eventosCampana(ev, "submit"); });
+  document.addEventListener("dblclick", (ev) => { const tr = ev.target.closest && ev.target.closest("tr[data-op-fila]"); if (!tr || !esAdmin() || UI.modal || ev.target.closest("select, input, button")) return; const o = G.oport[tr.dataset.opFila]; if (o) abrirOport(o.campana_id, o.id); });
 
   /* ===================================================================== */
   /*                                USUARIOS                                 */
@@ -2072,8 +2553,8 @@
   document.addEventListener("submit", (ev) => { if (UI.tab === "usuarios") eventosUsuarios(ev, "submit"); });
 
   /* ------------------------------------------ solo lectura (rol lector) */
-  const EDITA = ["nota", "juntaCampo", "cf", "an", "canc", "kx", "fc", "cliCart", "ed", "kpi", "cli", "op", "motivo", "cb", "cbCart", "cbMeta", "cbPrincipal"];
-  const ACCIONES_ADMIN = ["modoEd", "compNuevo", "sugerir", "compBorrar", "anRegenerar", "anNuevo", "anBorrar", "anComp", "cancNueva", "cancBorrar", "kxNuevo", "kxBorrar", "fcSem", "igualar", "rest", "edQuitar", "edTodo", "baseReset", "importarTxt", "campNueva", "campEditar", "campBorrar", "opNueva", "opPegar", "opImportar", "opBorrar", "motivoNuevo", "motivoBorrar", "cbTodas"];
+  const EDITA = ["nota", "juntaCampo", "cf", "an", "canc", "kx", "fc", "cliCart", "ed", "kpi", "cli", "op", "motivo", "cb", "cbCart", "cbMeta", "cbPrincipal", "cba", "cbMc", "cbX"];
+  const ACCIONES_ADMIN = ["modoEd", "compNuevo", "sugerir", "compBorrar", "anRegenerar", "anNuevo", "anBorrar", "anComp", "cancNueva", "cancBorrar", "kxNuevo", "kxBorrar", "fcSem", "igualar", "rest", "edQuitar", "edTodo", "baseReset", "importarTxt", "campNueva", "campEditar", "campBorrar", "opNueva", "opPegar", "opImportar", "opBorrar", "motivoNuevo", "motivoBorrar", "cbTodas", "opEditar", "campProd", "cbProdNuevo", "cbProdEditar", "cbProdBorrar", "cbXNuevo", "cbXBorrar"];
   const esEdicion = (d) => EDITA.some((k) => d[k] !== undefined) || ACCIONES_ADMIN.some((k) => d[k] !== undefined);
   function bloquearLector(raiz) {
     document.body.classList.toggle("lector", !esAdmin());
@@ -2108,7 +2589,7 @@
       if (hasta >= data.length) for (let x = data.length; x <= hasta; x++) data.push(piso(r.m * x + r.b));
       const color = ds.tendColor || (typeof ds.borderColor === "string" ? ds.borderColor : typeof ds.backgroundColor === "string" ? ds.backgroundColor : C.ink2);
       const paso = ds.tendPaso || "mes";
-      const pend = ds.tend === "M" ? `${r.m >= 0 ? "+" : ""}${etqM(r.m)}/${paso}` : ds.tend === "%" ? `${r.m >= 0 ? "+" : "−"}${Math.abs(r.m * 100).toFixed(1)} pts/${paso}` : ds.tend === "x" ? `${r.m >= 0 ? "+" : "−"}${Math.abs(r.m).toFixed(2)}×/${paso}` : `${r.m >= 0 ? "+" : "−"}${Math.abs(r.m).toFixed(1)}/${paso}`;
+      const pend = ds.tend === "M" ? `${r.m >= 0 ? "+" : ""}${etqM(r.m)}/${paso}` : ds.tend === "%" ? `${r.m >= 0 ? "+" : "−"}${Math.abs(r.m * 100).toFixed(1)} pts/${paso}` : ds.tend === "x" ? `${r.m >= 0 ? "+" : "−"}${Math.abs(r.m).toFixed(2)}×/${paso}` : ds.tend === "pz" ? `${r.m >= 0 ? "+" : "−"}${Math.abs(r.m).toFixed(0)} pz/${paso}` : `${r.m >= 0 ? "+" : "−"}${Math.abs(r.m).toFixed(1)}/${paso}`;
       extra.push({ type: "line", label: `${ds.tendNombre || "Tendencia " + (ds.label || "")} (${pend})`, data, borderColor: color, backgroundColor: color, borderDash: [7, 5], borderWidth: 1.6, pointRadius: 0, pointHoverRadius: 0, fill: false, tendencia: true, order: -10, stack: "__t" + i, yAxisID: ds.yAxisID, spanGaps: true });
     });
     cfg.data.datasets.push(...extra);
@@ -2117,10 +2598,11 @@
   /* ===================================================================== */
   /*                       NUBE · sincronización con Supabase                */
   /* ===================================================================== */
-  const COLS_CAMP = ["id", "nombre", "tipo", "estado", "inicio", "fin", "marca", "modelos", "carteras", "objetivo", "metas", "notas"];
-  const COLS_OP = ["id", "campana_id", "cartera", "cliente", "oportunidad", "marca", "modelo", "monto", "estado", "motivo", "detalle", "competidor", "fecha_alta", "fecha_cierre", "fecha_factura", "monto_facturado", "notas"];
+  const COLS_CAMP = ["id", "nombre", "tipo", "estado", "inicio", "fin", "marca", "modelos", "carteras", "objetivo", "metas", "notas", "productos", "ajustes"];
+  const COLS_OP = ["id", "campana_id", "cartera", "cliente", "oportunidad", "marca", "modelo", "monto", "estado", "motivo", "detalle", "competidor", "fecha_alta", "fecha_cierre", "fecha_factura", "monto_facturado", "notas",
+    "cantidad", "partidas", "contacto", "origen", "etapa", "probabilidad", "fecha_estimada", "cotizacion", "factura", "linea", "numero_parte", "venta"];
   const SYNC = { reg: new Map(), camp: new Map(), op: new Map(), base: new Map(), ts: null, tsBase: null, enCurso: false, otraVez: false, estado: "ok" };
-  const limpiarFila = (o, cols) => { const r = {}; for (const c of cols) r[c] = o[c] === "" || o[c] === undefined ? null : o[c]; if (cols === COLS_OP) { r.monto = +r.monto || 0; r.monto_facturado = r.monto_facturado == null ? null : +r.monto_facturado || 0; r.cliente = r.cliente || "(sin cliente)"; } if (cols === COLS_CAMP) { r.carteras = r.carteras || []; r.metas = r.metas || {}; r.nombre = r.nombre || "(sin nombre)"; } return r; };
+  const limpiarFila = (o, cols) => { const r = {}; for (const c of cols) r[c] = o[c] === "" || o[c] === undefined ? null : o[c]; if (cols === COLS_OP) { r.monto = +r.monto || 0; r.monto_facturado = r.monto_facturado == null ? null : +r.monto_facturado || 0; r.cliente = r.cliente || "(sin cliente)"; r.partidas = Array.isArray(r.partidas) ? r.partidas : []; r.venta = Array.isArray(r.venta) ? r.venta : []; r.cantidad = r.cantidad == null ? null : +r.cantidad || 0; r.probabilidad = r.probabilidad == null ? null : Math.max(0, Math.min(100, Math.round(+r.probabilidad) || 0)); } if (cols === COLS_CAMP) { r.carteras = r.carteras || []; r.metas = r.metas || {}; r.nombre = r.nombre || "(sin nombre)"; r.productos = Array.isArray(r.productos) ? r.productos : []; r.ajustes = r.ajustes && typeof r.ajustes === "object" ? r.ajustes : {}; } return r; };
   // Registros: todo lo que se captura en la junta, como pares colección/clave
   function registrosActuales() {
     const m = new Map();
@@ -2189,8 +2671,9 @@
   // Datos de los reportes: se guardan en partes (base, facturas por mes, fotos por mes)
   function partesBase(B) {
     const P = new Map();
-    const { facturas, fotos, ...resto } = B;
+    const { facturas, fotos, productos, ...resto } = B;
     P.set("base", resto);
+    if (productos) P.set("productos", productos);
     if (facturas) {
       const { docs, ...meta } = facturas; P.set("facturas:meta", meta);
       const porMes = {}; for (const d of docs || []) (porMes[d[1].slice(0, 7)] = porMes[d[1].slice(0, 7)] || []).push(d);
@@ -2203,6 +2686,7 @@
     const r = new Map(filas.map((f) => [f.clave, f.datos]));
     if (!r.has("base")) return null;
     const B = r.get("base");
+    if (r.has("productos")) B.productos = r.get("productos");
     if (r.has("facturas:meta")) {
       const docs = []; [...r.keys()].filter((k) => /^facturas:\d{4}-\d{2}$/.test(k)).sort().forEach((k) => docs.push(...r.get(k)));
       B.facturas = Object.assign({}, r.get("facturas:meta"), { docs });

@@ -297,7 +297,7 @@
       if (f.includes("movimiento") && f.includes("fecha de factura") && f.includes("subtotal")) {
         const c = (n) => f.indexOf(n);
         return { fila: i, mov: c("movimiento"), fecha: c("fecha de factura"), cli: c("contacto"), vend: c("vendedor"), sub: c("subtotal"),
-          prod: c("producto"), pago: c("estado del pago"), estado: c("estado de la factura"), tipo: c("tipo de movimiento") };
+          prod: c("producto"), cat: c("categoria del producto"), cant: c("cantidad de producto"), pago: c("estado del pago"), estado: c("estado de la factura"), tipo: c("tipo de movimiento") };
       }
     }
     return null;
@@ -308,7 +308,7 @@
       const F = libro.filas(hoja);
       const h = encabezadoOdoo(F);
       if (!h) continue;
-      const docs = new Map(); let lineas = 0, canceladas = 0;
+      const docs = new Map(), productos = new Map(); let lineas = 0, canceladas = 0;
       for (let i = h.fila + 1; i < F.length; i++) {
         const r = F[i] || [];
         const mov = String(r[h.mov] ?? "").trim(); if (!mov) continue;
@@ -325,8 +325,20 @@
           docs.set(k, x);
         }
         x.sub += num(r[h.sub]) || 0; lineas++;
-        const pr = (String(r[h.prod] ?? "").match(/^\[([^\]]+)\]/) || [])[1];
+        const textoProd = String(r[h.prod] ?? "");
+        const pr = (textoProd.match(/^\[([^\]]+)\]/) || [])[1];
         if (pr) x.prods.add(pr.trim().toUpperCase());
+        // Catálogo de productos facturados: [número de parte modelo] descripción, categoría All / MARCA / Línea
+        const cat = String(h.cat >= 0 ? r[h.cat] ?? "" : "").split(/\s\/\s/).map((z) => z.trim()).filter(Boolean);
+        if (pr && cat.length >= 2 && !/^(ANTICIPO|SERVICIOS)$/i.test(cat[1]) && !/^CRED_/i.test(pr)) {
+          const partes = pr.trim().split(/\s+/);
+          const np = partes[0], modelo = partes.length > 1 ? partes.slice(1).join(" ") : partes[0];
+          const clave = (np + "|" + modelo).toUpperCase();
+          const cant = num(r[h.cant]), sub = num(r[h.sub]);
+          const p0 = productos.get(clave) || [np, modelo, textoProd.replace(/^\[[^\]]*\]\s*/, "").slice(0, 90), cat[1], cat.slice(2).join(" / "), null, 0, ""];
+          if (x.t === "F" && cant > 0 && sub > 0 && x.f >= p0[7]) { p0[5] = r2(sub / cant); p0[7] = x.f; }
+          p0[6]++; productos.set(clave, p0);
+        }
       }
       if (!docs.size) continue;
       const lista = [...docs.values()].map((x) => {
@@ -334,9 +346,104 @@
         return [x.k, x.f, x.cli, x.cart, r2(x.sub), x.t, x.pago, x.ref, ant, x.est];
       });
       const fechas = lista.map((x) => x[1]).sort();
-      return { tipo: "facturas", hoja, docs: lista, desde: fechas[0], hasta: fechas[fechas.length - 1], lineas, canceladas };
+      return { tipo: "facturas", hoja, docs: lista, productos: [...productos.values()].map((p) => p.slice(0, 7)), desde: fechas[0], hasta: fechas[fechas.length - 1], lineas, canceladas };
     }
     return null;
+  }
+
+
+  /* ------------------------------------------------ Reporte de campaña ---
+     Libro con tablas de cotizaciones y de ventas (exportadas de Odoo) y, si
+     existe, una hoja de objetivos por cartera. Las columnas se reconocen por
+     su encabezado, no por su posición, para tolerar cambios de formato. */
+  const CAMPOS_CAMP = {
+    cotizaciones: {
+      orden: [/^orden$/, /^pedido$/, /^cotizacion$/, /orden|pedido|cotizaci|referencia/],
+      fecha: [/fecha de la orden/, /fecha.*cotiz/, /fecha de creacion/, /^fecha/],
+      cartera: [/^cartera$/], vendedor: [/vendedor|comercial|salesperson/],
+      cliente: [/^cliente$/, /nombre del cliente|cliente|contacto|razon social/],
+      producto: [/^producto$/, /producto|articulo|modelo/], cantidad: [/^cantidad$/, /cantidad|piezas|pzas/],
+      precio: [/precio unitario usd/, /precio unitario/, /^precio/], subtotal_usd: [/subtotal usd/, /total usd|importe usd/],
+      subtotal: [/^subtotal$/, /subtotal|importe|monto/], tc: [/^t\.? ?c\.?$/, /tipo de cambio/],
+    },
+    ventas: {
+      factura: [/^movimiento$/, /^factura$/, /movimiento|factura|numero/],
+      fecha: [/fecha de factura/, /fecha.*fact/, /^fecha/],
+      cartera: [/^cartera$/], vendedor: [/vendedor|comercial|salesperson/],
+      cliente: [/contacto principal/, /^cliente$/, /cliente|contacto|razon social/],
+      producto: [/^producto$/, /producto|articulo|modelo/], cantidad: [/cantidad de producto/, /^cantidad$/, /cantidad|piezas/],
+      importe: [/importe sin impuestos/, /^subtotal$/, /importe|subtotal|monto|total/],
+    },
+  };
+  const OBLIGATORIOS = { cotizaciones: ["fecha", "cliente", "producto", "cantidad"], ventas: ["fecha", "cliente", "producto", "cantidad"] };
+  function mapearColumnas(enc, tipo) {
+    const m = {}; const usados = new Set();
+    for (const [campo, reglas] of Object.entries(CAMPOS_CAMP[tipo])) {
+      for (const re of reglas) { const j = enc.findIndex((h, i) => !usados.has(i) && re.test(h)); if (j >= 0) { m[campo] = j; usados.add(j); break; } }
+    }
+    return m;
+  }
+  function leerReporteCampana(libro) {
+    if (!libro.filas) return null;
+    const R = { tablas: [], objetivos: null, inversion: null, moneda: null, paridad: null, precio: null, titulo: "" };
+    for (const hoja of libro.hojas) {
+      const F = libro.filas(hoja);
+      // Datos sueltos: título, inversión, paridad, precio de campaña
+      for (let i = 0; i < Math.min(F.length, 40); i++) for (let j = 0; j < (F[i] || []).length; j++) {
+        const v = F[i][j]; const t = norm(v).toLowerCase();
+        if (!t) continue;
+        const crudo = String(v).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+        if (!R.titulo && /campana/.test(t) && t.length < 80) R.titulo = String(v).replace(/objetivos?/i, "").replace(/campa[nñ]a/i, "").trim();
+        const mi = crudo.match(/inversion[^0-9]*\$?\s*([\d,]+(?:\.\d+)?)\s*(usd|mxn)?/i);
+        if (mi && !R.inversion) { R.inversion = +mi[1].replace(/,/g, ""); if (mi[2]) R.moneda = mi[2].toUpperCase(); }
+        if (/^paridad$/.test(t)) { const x = num(F[i][j - 1]) ?? num(F[i][j + 1]); if (x) R.paridad = x; }
+        const mp = crudo.trim().match(/^\$?\s*([\d,]+(?:\.\d+)?)\s*(usd|mxn)$/i);
+        if (mp && /precio/.test(norm((F[i - 1] || [])[j]).toLowerCase() + norm((F[i - 1] || [])[j + 1]).toLowerCase())) { R.precio = +mp[1].replace(/,/g, ""); R.moneda = R.moneda || mp[2].toUpperCase(); }
+      }
+      // Tablas: se busca el renglón de encabezados en las primeras filas
+      let encontrada = false;
+      for (let i = 0; i < Math.min(F.length, 15) && !encontrada; i++) {
+        const enc = (F[i] || []).map((x) => norm(x).toLowerCase());
+        if (enc.filter(Boolean).length < 4) continue;
+        for (const tipo of ["cotizaciones", "ventas"]) {
+          const m = mapearColumnas(enc, tipo);
+          const tieneClave = tipo === "cotizaciones" ? m.orden !== undefined && /orden|pedido|cotiz/.test(enc[m.orden] || "") && (enc[m.fecha] || "").includes("orden") || /cotiz/i.test(hoja) && m.orden !== undefined : /fact/.test(enc[m.fecha] || "") || /movimiento|factura/.test(enc[m.factura] || "");
+          if (OBLIGATORIOS[tipo].every((c) => m[c] !== undefined) && tieneClave) {
+            const filas = F.slice(i + 1).filter((r) => r && r[m.producto] != null && String(r[m.producto]).trim() && num(r[m.cantidad]) !== null);
+            R.tablas.push({ hoja, tipo, fila: i, encabezados: (F[i] || []).map((x) => String(x ?? "").trim()), mapa: m, filas });
+            encontrada = true; break;
+          }
+        }
+      }
+      // Objetivos por cartera: encabezado con "cartera" y "objetivo"
+      if (!encontrada && !R.objetivos) for (let i = 0; i < Math.min(F.length, 15); i++) {
+        const enc = (F[i] || []).map((x) => norm(x).toLowerCase());
+        const jo = enc.findIndex((h) => /^objetivo/.test(h)); const jc = enc.findIndex((h) => /^cartera/.test(h));
+        if (jo < 0 || jc < 0) continue;
+        const sub = norm((F[i + 1] || [])[jo]).toLowerCase();
+        const metrica = /monto|\$|usd|mxn|venta/.test(sub) ? "ganado" : /cotiz/.test(sub) ? "pz_cot" : "pz_gan";
+        const por = {};
+        for (let r = i + 1; r < F.length; r++) {
+          const fila = F[r] || []; const v = num(fila[jo]);
+          const cod = fila.slice(0, jc + 1).map((x) => String(x ?? "").trim().match(/^C\s?(\d{1,2})\b/i)).find(Boolean);
+          if (cod && v !== null) por["C" + cod[1].padStart(2, "0")] = v;
+          else if (!cod && Object.keys(por).length && fila.every((x) => x == null || x === "" || typeof x === "number")) break;
+        }
+        if (Object.keys(por).length) R.objetivos = { hoja, metrica, porCartera: por, total: Object.values(por).reduce((a, b) => a + b, 0) };
+        break;
+      }
+    }
+    return R.tablas.length || R.objetivos ? R : null;
+  }
+  // "[1133547 WTM10L241611D0AV] Sensor Fotoeléctrico de SICK" → partes del producto
+  function partesProducto(txt) {
+    const t = String(txt || "").trim();
+    const b = t.match(/^\[([^\]]+)\]\s*(.*)$/);
+    const cod = b ? b[1].trim().split(/\s+/) : [];
+    const desc = b ? b[2] : t;
+    const marca = (desc.match(/\bde\s+(?:KA\s+)?([A-ZÁÉÍÓÚÑ0-9][A-ZÁÉÍÓÚÑ0-9 &.\-]+)$/) || [])[1] || "";
+    const linea = marca ? desc.replace(new RegExp("\\s+de\\s+(?:KA\\s+)?" + marca.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$"), "") : desc;
+    return { numero_parte: cod[0] || "", modelo: cod.length > 1 ? cod.slice(1).join(" ") : cod[0] || t, descripcion: desc, marca: marca.trim(), linea: linea.trim() };
   }
 
   function leer(libro, opciones) {
@@ -388,6 +495,10 @@
         const ym = +k.slice(0, 4) * 100 + +k.slice(5, 7);
         if (ym < mesActual && !D.fotos[k] && (k > lectura.desde.slice(0, 7) || lectura.desde.endsWith("-01"))) D.fotos[k] = { tomada: ahora.toISOString(), archivo, docs: L };
       }
+      // Catálogo de productos: se agregan los nuevos y se actualiza el precio de los conocidos
+      const PM = new Map((D.productos || []).map((p) => [(p[0] + "|" + p[1]).toUpperCase(), p]));
+      for (const p of lectura.productos || []) { const k = (p[0] + "|" + p[1]).toUpperCase(); const q = PM.get(k); PM.set(k, q ? [p[0], p[1], p[2] || q[2], p[3], p[4], p[5] ?? q[5], Math.max(q[6], p[6])] : p); }
+      D.productos = [...PM.values()].sort((a, b) => b[6] - a[6]);
       D.fuentes.push({ archivo, tipo: `Facturas Odoo ${lectura.desde} a ${lectura.hasta}` });
     } else if (lectura.tipo === "clientes") {
       const vc = D.ventasCliente || { filas: [], nombres: {} };
@@ -411,6 +522,6 @@
     };
   }
 
-  const API = { leer, combinar, libroDeSheetJS, tipoDeLibro, colNum, colLetra, leerClientes, leerFacturasOdoo, norm };
+  const API = { leer, combinar, libroDeSheetJS, tipoDeLibro, colNum, colLetra, leerClientes, leerFacturasOdoo, norm, normCliente, leerReporteCampana, mapearColumnas, partesProducto, CAMPOS_CAMP, fechaTexto, iso };
   if (typeof module !== "undefined" && module.exports) module.exports = API; else global.ISELParser = API;
 })(typeof window !== "undefined" ? window : globalThis);

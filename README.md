@@ -59,16 +59,30 @@ cualquier cambio de un usuario de solo vista.
 
 ## Campañas
 
-Pestaña **Campañas**, capturada a mano:
+Pestaña **Campañas**. Se captura a mano y, si la campaña tiene reporte, se alimenta con su Excel.
 
-- **Campaña:** nombre, tipo (Outbound / Inbound), estado, fechas, marca, modelos, carteras que
-  participan, objetivo y metas (monto ganado, facturado, cotizado, oportunidades, clientes). Una
-  meta se marca como principal.
-- **Oportunidades:** cartera, cliente, oportunidad, modelo, monto, estado (abierta, ganada, perdida),
-  motivo de pérdida, competidor, fechas y monto facturado. Se pueden pegar varias desde Excel.
-- **Tablero:** avance contra tiempo transcurrido, proyección por tendencia, resultado por cartera,
-  modelos, tasa de cierre, ciclo de venta y análisis de pérdidas por motivo, cartera y competidor.
-  El catálogo de motivos es editable.
+- **Campaña:** nombre, tipo (Outbound / Inbound), estado, fechas, marca, moneda (MXN o USD con su
+  paridad), modelos en texto libre, carteras que participan, objetivo y notas.
+- **Productos de la campaña:** botón *+ Agregar producto* abre una ventana para buscar en el catálogo
+  de productos facturados (del reporte de facturas de Odoo) o capturar modelo, número de parte,
+  marca, línea, descripción, precio de lista y unidad. Se pueden agregar varios seguidos.
+- **Metas:** monto ganado, facturado o cotizado, oportunidades, clientes, **piezas cotizadas** y
+  **piezas vendidas**; una es la principal. Opcional: meta por cartera e indicadores propios de la
+  campaña (visitas, demostraciones, muestras…), porque no todas las campañas miden lo mismo.
+- **Oportunidades:** *+ Oportunidad* (o *Editar* / doble clic en la fila) abre la ventana completa:
+  cartera, cliente, contacto, origen, folio, cotización de Odoo, etapa y probabilidad, fechas de alta y
+  cierre estimado, partidas (producto, cantidad, precio, descuento, importe), estado, fecha de cierre,
+  motivo de pérdida (obligatorio si se perdió), competidor, factura, monto facturado y notas.
+  Estado y motivo también se cambian directo en la tabla. *Pegar desde Excel* sigue disponible.
+- **Reporte de campaña (Excel):** *⇪ Cargar reporte de campaña* lee las hojas de cotizaciones y de
+  ventas (exportadas de Odoo) y, si existe, la hoja de objetivos por cartera. Las columnas se
+  reconocen por su encabezado; si el formato cambia, en la ventana se elige qué columna es cada dato y
+  la campaña lo recuerda. Cada cotización (folio) es una oportunidad con sus partidas; cada factura se
+  liga a la cotización del mismo cliente o se registra como venta. Volver a cargar el reporte actualiza
+  por folio y no duplica facturas. También toma inversión, precio de campaña y paridad.
+- **Tablero:** avance contra tiempo, proyección por tendencia, resultado por cartera (monto, piezas o
+  número) contra su meta, productos (piezas cotizadas y vendidas, precio promedio), inversión contra
+  venta, tasa de cierre, ciclo de venta y análisis de pérdidas por motivo, cartera y competidor.
 
 ## Líneas de tendencia
 
@@ -117,7 +131,7 @@ styles.css            Estilos
 js/config.js          Conexión con Supabase
 js/nube.js            Cliente de Supabase (acceso, datos, función de usuarios)
 js/parser.js          Lectura de los reportes de Excel
-js/app.js             Vistas, filtros, edición, compromisos, campañas, usuarios y sesión
+js/app.js             Vistas, filtros, edición, compromisos, campañas (ventanas y reporte), usuarios y sesión
 schema.sql            Tablas y reglas de acceso
 supabase/functions/   Función jm-usuarios (alta y administración de usuarios)
 datos.enc.json        Datos anteriores cifrados (solo para la importación inicial)

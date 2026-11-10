@@ -2856,6 +2856,23 @@
     if (cambio) try { localStorage.setItem(LS_REGLAS_PASS, JSON.stringify({ min: PASS_REQ.min, simbolo: PASS_REQ.simbolo })); } catch (e) {}
     return cambio;
   }
+  // Pregunta a Supabase sus requisitos sin cambiar nada: envía una contraseña de 1 carácter, que
+  // siempre se rechaza (el mínimo de Supabase es 6), y lee la respuesta (largo y caracteres exigidos).
+  let SONDEO_PASS = null;
+  function sondearReglas() {
+    if (!NUBE || SONDEO_PASS) return SONDEO_PASS || Promise.resolve(false);
+    SONDEO_PASS = NUBE.auth.cambiarPassword("a").then(() => false, (x) => {
+      const d = x.detalle || {}; const m = String(d.msg || d.message || "");
+      if (x.status !== 422 && !/weak|should/i.test(m)) return false;
+      const n = +((m.match(/at least (\d+) characters?/i) || [])[1] || 0);
+      const req = { min: n >= 6 ? n : PASS_REQ.min, simbolo: /contain at least one character of each/i.test(m) && /[!@#$%^&*]/.test(m.split(/each:?/i).pop()) };
+      const cambio = req.min !== PASS_REQ.min || req.simbolo !== PASS_REQ.simbolo;
+      Object.assign(PASS_REQ, req);
+      try { localStorage.setItem(LS_REGLAS_PASS, JSON.stringify(req)); } catch (e) {}
+      return cambio;
+    });
+    return SONDEO_PASS;
+  }
   function pintarReglas() {
     const a = ($("#c-pass1") || {}).value || "", b = ($("#c-pass2") || {}).value || "";
     for (const [k, , f] of reglasActivas()) { const li = document.querySelector(`[data-regla="${k}"]`); if (li) li.classList.toggle("ok", f(a)); }
@@ -2885,10 +2902,11 @@
         <ul class="reglas-pass" id="reglas-pass" aria-live="polite">${listaReglas()}</ul>
         <label class="campo-label" for="c-pass2">Repite la contraseña</label>${campoPass("c-pass2", "new-password")}
         <span class="error" id="c-error" ${error ? "" : "hidden"}>${esc(error || "")}</span>
-        <p class="nota-pie" style="margin:0">Ejemplo de una contraseña válida: <span class="mono">${PASS_REQ.simbolo ? "Ventas-2026-Isel" : "Ventas2026Isel"}</span> (no la uses tal cual). Usa el ojo para revisar lo que escribiste.</p>
+        <p class="nota-pie" style="margin:0">Ejemplo de una contraseña válida: <span class="mono" id="ej-pass">${PASS_REQ.simbolo ? "Ventas-2026-Isel" : "Ventas2026Isel"}</span> (no la uses tal cual). Usa el ojo para revisar lo que escribiste.</p>
         <div style="display:flex;gap:8px;justify-content:flex-end">${forzado ? `<button class="btn" type="button" data-salir>Salir</button>` : `<button class="btn" type="button" data-cancelar-cambio>Cancelar</button>`}<button class="btn prim" type="submit" id="c-guardar">Guardar contraseña</button></div>
       </form>`);
     $("#c-pass1").focus();
+    sondearReglas().then((cambio) => { if (cambio && $("#reglas-pass")) { $("#reglas-pass").innerHTML = listaReglas(); pintarReglas(); const ej = $("#ej-pass"); if (ej) ej.textContent = PASS_REQ.simbolo ? "Ventas-2026-Isel" : "Ventas2026Isel"; } });
     const mostrarError = (m) => { const el = $("#c-error"); el.textContent = m; el.hidden = !m; };
     $("#f-cambio").addEventListener("input", () => { pintarReglas(); mostrarError(""); });
     $("#f-cambio").addEventListener("submit", async (e) => {

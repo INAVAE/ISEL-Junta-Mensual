@@ -2833,15 +2833,29 @@
   }
   // Reglas de la contraseña personal
   let PASS_TEMP = null;
-  const REGLAS_PASS = [
-    ["largo", "Al menos 8 caracteres", (a) => a.length >= 8],
+  // Lo que exige Supabase puede ser más estricto (largo mínimo, símbolo): se aprende de su respuesta y se recuerda
+  const LS_REGLAS_PASS = "isel-jm-reglas-pass";
+  const PASS_REQ = (() => { try { return { min: 8, simbolo: false, ...JSON.parse(localStorage.getItem(LS_REGLAS_PASS) || "{}") }; } catch (e) { return { min: 8, simbolo: false }; } })();
+  const reglasPass = () => [
+    ["largo", `Al menos ${PASS_REQ.min} caracteres`, (a) => a.length >= PASS_REQ.min],
     ["mayus", "Una letra mayúscula (A-Z)", (a) => /[A-ZÁÉÍÓÚÑ]/.test(a)],
     ["minus", "Una letra minúscula (a-z)", (a) => /[a-záéíóúñ]/.test(a)],
     ["num", "Un número (0-9)", (a) => /\d/.test(a)],
     ["esp", "Sin espacios", (a) => a.length > 0 && !/\s/.test(a)],
+    ...(PASS_REQ.simbolo ? [["simb", "Un símbolo (por ejemplo ! # $ % & * - _)", (a) => /[^A-Za-z0-9ÁÉÍÓÚÑáéíóúñ\s]/.test(a)]] : []),
     ["temp", "Diferente a la contraseña temporal", (a) => a.length > 0 && a !== PASS_TEMP],
   ];
-  const reglasActivas = () => REGLAS_PASS.filter((r) => r[0] !== "temp" || PASS_TEMP);
+  const reglasActivas = () => reglasPass().filter((r) => r[0] !== "temp" || PASS_TEMP);
+  const listaReglas = () => `<li class="titulo">Tu contraseña debe tener:</li>${reglasActivas().map(([k, t]) => `<li data-regla="${k}">${t}</li>`).join("")}<li data-regla="igual">Escribirse igual en los dos campos</li>`;
+  // Si el servidor rechaza la contraseña, ajusta las reglas a lo que pidió
+  function aprenderReglas(x) {
+    const m = String(x.message || ""); const razones = (x.detalle && x.detalle.weak_password && x.detalle.weak_password.reasons) || [];
+    let cambio = false;
+    const n = +((m.match(/al menos (\d+) caracteres/) || [])[1] || 0); if (n > PASS_REQ.min) { PASS_REQ.min = n; cambio = true; }
+    if (/símbolo/.test(m) && !PASS_REQ.simbolo) { PASS_REQ.simbolo = true; cambio = true; }
+    if (cambio) try { localStorage.setItem(LS_REGLAS_PASS, JSON.stringify({ min: PASS_REQ.min, simbolo: PASS_REQ.simbolo })); } catch (e) {}
+    return cambio;
+  }
   function pintarReglas() {
     const a = ($("#c-pass1") || {}).value || "", b = ($("#c-pass2") || {}).value || "";
     for (const [k, , f] of reglasActivas()) { const li = document.querySelector(`[data-regla="${k}"]`); if (li) li.classList.toggle("ok", f(a)); }
@@ -2868,10 +2882,10 @@
     cajaAcceso(`<form id="f-cambio" style="display:flex;flex-direction:column;gap:12px" novalidate>
         <div class="aviso info">${forzado ? "Entraste con una contraseña temporal. Define tu contraseña personal para continuar." : "Cambia tu contraseña."}</div>
         <label class="campo-label" for="c-pass1">Nueva contraseña</label>${campoPass("c-pass1", "new-password", 'aria-describedby="reglas-pass"')}
-        <ul class="reglas-pass" id="reglas-pass" aria-live="polite"><li class="titulo">Tu contraseña debe tener:</li>${reglasActivas().map(([k, t]) => `<li data-regla="${k}">${t}</li>`).join("")}<li data-regla="igual">Escribirse igual en los dos campos</li></ul>
+        <ul class="reglas-pass" id="reglas-pass" aria-live="polite">${listaReglas()}</ul>
         <label class="campo-label" for="c-pass2">Repite la contraseña</label>${campoPass("c-pass2", "new-password")}
         <span class="error" id="c-error" ${error ? "" : "hidden"}>${esc(error || "")}</span>
-        <p class="nota-pie" style="margin:0">Ejemplo de una contraseña válida: <span class="mono">Ventas2026Isel</span> (no la uses tal cual). Usa el ojo para revisar lo que escribiste.</p>
+        <p class="nota-pie" style="margin:0">Ejemplo de una contraseña válida: <span class="mono">${PASS_REQ.simbolo ? "Ventas-2026-Isel" : "Ventas2026Isel"}</span> (no la uses tal cual). Usa el ojo para revisar lo que escribiste.</p>
         <div style="display:flex;gap:8px;justify-content:flex-end">${forzado ? `<button class="btn" type="button" data-salir>Salir</button>` : `<button class="btn" type="button" data-cancelar-cambio>Cancelar</button>`}<button class="btn prim" type="submit" id="c-guardar">Guardar contraseña</button></div>
       </form>`);
     $("#c-pass1").focus();
@@ -2885,7 +2899,11 @@
       if (a !== b) { mostrarError("Las contraseñas no coinciden: revísalas con el ojo."); $("#c-pass2").focus(); return; }
       const btn = $("#c-guardar"); btn.disabled = true; btn.textContent = "Guardando…";
       try { await NUBE.auth.cambiarPassword(a); await NUBE.db.rpc("jm_password_cambiada"); PASS_TEMP = null; toast("Contraseña actualizada"); await entrarConSesion(); }
-      catch (x) { btn.disabled = false; btn.textContent = "Guardar contraseña"; mostrarError(x.message); }
+      catch (x) {
+        btn.disabled = false; btn.textContent = "Guardar contraseña";
+        if (aprenderReglas(x)) { $("#reglas-pass").innerHTML = listaReglas(); pintarReglas(); mostrarError(`${x.message} El servidor de acceso pide más de lo que indicaba la lista; ya se actualizó arriba.`); $("#c-pass1").focus(); }
+        else mostrarError(x.message);
+      }
     });
   }
   async function entrarConSesion() {

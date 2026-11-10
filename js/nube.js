@@ -26,7 +26,10 @@
       if (/Invalid login credentials/i.test(m)) return "Correo o contraseña incorrectos.";
       if (/Email not confirmed/i.test(m)) return "El correo no está confirmado. Pide al administrador que revise tu cuenta.";
       if (/row-level security|permission denied/i.test(m)) return "No tienes permiso para hacer este cambio.";
-      if (/Password should be at least/i.test(m)) return "La contraseña debe tener al menos 8 caracteres.";
+      const largo = m.match(/at least (\d+) characters?/i);
+      if (largo) return `La contraseña debe tener al menos ${largo[1]} caracteres.`;
+      if (/contain at least one character of each/i.test(m)) return /[!@#$%^&*]/.test(m.split(":").pop()) ? "La contraseña debe incluir mayúsculas, minúsculas, números y al menos un símbolo (por ejemplo ! # $ % & * - _)." : "La contraseña debe incluir mayúsculas, minúsculas y números.";
+      if (/pwned|known to be weak|easy to guess/i.test(m)) return "Esa contraseña es muy común o apareció en filtraciones de datos; elige otra.";
       if (/same.*password|different from the old/i.test(m)) return "La nueva contraseña debe ser distinta de la actual.";
       if (/JWT expired|invalid JWT/i.test(m) || status === 401) return "Tu sesión expiró. Vuelve a entrar.";
       if (/Failed to fetch|NetworkError/i.test(m)) return "Sin conexión con el servidor. Revisa tu internet.";

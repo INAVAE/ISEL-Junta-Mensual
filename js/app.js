@@ -2475,9 +2475,21 @@
   /*                                USUARIOS                                 */
   /* ===================================================================== */
   const US = { lista: null, cargando: false, error: "", form: { nombre: "", email: "", rol: "lector", password: "", pedir: true }, reset: null };
-  const passTemporal = () => { const A = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789"; const r = new Uint32Array(10); crypto.getRandomValues(r); return "Isel-" + [...r].map((x) => A[x % A.length]).join(""); };
+  // Contraseña temporal: siempre con mayúsculas, minúsculas, números y símbolo, y del largo que pida Supabase
+  function passTemporal() {
+    const M = "ABCDEFGHJKLMNPQRSTUVWXYZ", m = "abcdefghijkmnpqrstuvwxyz", N = "23456789", S = "#$%*", T = M + m + N;
+    const azar = (n) => { const r = new Uint32Array(n); crypto.getRandomValues(r); return [...r]; };
+    const largo = Math.max(10, (PASS_REQ.min || 8) - 5);
+    const k = azar(largo + 1);
+    const ch = [M[k[0] % M.length], m[k[1] % m.length], N[k[2] % N.length], N[k[3] % N.length], ...k.slice(4, largo).map((x) => T[x % T.length])];
+    for (let i = ch.length - 1, j = azar(ch.length); i > 0; i--) { const t = j[i] % (i + 1); [ch[i], ch[t]] = [ch[t], ch[i]]; }
+    return "Isel-" + ch.join("") + S[k[largo] % S.length];
+  }
+  // Revisa una contraseña contra las reglas vigentes (sin la de "distinta a la temporal")
+  const faltaEnPass = (a) => { const r = reglasPass().find(([k, , f]) => k !== "temp" && !f(a)); return r ? r[1].toLowerCase() : null; };
   async function cargarUsuarios() {
     if (!NUBE) return;
+    sondearReglas().then((cambio) => { if (cambio && US.form && /^Isel-/.test(US.form.password || "") && faltaEnPass(US.form.password)) { US.form.password = passTemporal(); if (UI.tab === "usuarios") render(); } });
     US.cargando = true; US.error = "";
     try { US.lista = (await NUBE.funcion("jm-usuarios", { accion: "listar" })).usuarios || []; }
     catch (e) { US.error = e.status === 404 ? "La función de usuarios no está instalada en Supabase (jm-usuarios)." : e.message; }
@@ -2526,7 +2538,7 @@
       if ("usRecargar" in bd) { US.lista = null; US.error = ""; render(); return true; }
       if ("usGenerar" in bd) { US.form.password = passTemporal(); render(); return true; }
       if (bd.usReset !== undefined) { US.reset = bd.usReset || null; render(); return true; }
-      if (bd.usResetOk) { const p = ($("#us-reset-pass") || {}).value || ""; if (p.length < 8) { toast("Mínimo 8 caracteres."); return true; } const u = (US.lista || []).find((x) => x.user_id === bd.usResetOk); US.reset = null; accionUsuario({ accion: "password", user_id: bd.usResetOk, password: p, pedir_cambio: true }, "Contraseña temporal asignada").then((r) => { if (r) { US.ultimo = { email: u ? u.email : "", password: p }; render(); } }); return true; }
+      if (bd.usResetOk) { const p = ($("#us-reset-pass") || {}).value || ""; const falta = faltaEnPass(p); if (falta) { toast(`La contraseña temporal no cumple: ${falta}. Usa una generada.`); return true; } const u = (US.lista || []).find((x) => x.user_id === bd.usResetOk); US.reset = null; accionUsuario({ accion: "password", user_id: bd.usResetOk, password: p, pedir_cambio: true }, "Contraseña temporal asignada").then((r) => { if (r) { US.ultimo = { email: u ? u.email : "", password: p }; render(); } }); return true; }
       if ("usCopiar" in bd) { copiar(`Correo: ${US.ultimo.email}\nContraseña temporal: ${US.ultimo.password}\nEntra en: ${location.href.split("#")[0]}`); return true; }
       if ("usOk" in bd) { US.ultimo = null; render(); return true; }
       if (bd.usQuitar) { if (UI.borrar === "u" + bd.usQuitar) { UI.borrar = null; accionUsuario({ accion: "quitar", user_id: bd.usQuitar }, "Acceso retirado"); } else { UI.borrar = "u" + bd.usQuitar; render(); } return true; }
@@ -2542,7 +2554,9 @@
     if (tipo === "input" && d.usf && d.usf !== "pedir") { US.form[d.usf] = t.value; return true; }
     if (tipo === "submit" && t.id === "f-usuario") {
       ev.preventDefault();
-      const F = US.form; const b = $("#us-crear"); if (b) { b.disabled = true; b.textContent = "Agregando…"; }
+      const F = US.form; const falta = faltaEnPass(F.password || "");
+      if (falta) { toast(`La contraseña temporal no cumple: ${falta}. Usa Generar para crear una válida.`); const el = $("#us-pass"); if (el) el.focus(); return true; }
+      const b = $("#us-crear"); if (b) { b.disabled = true; b.textContent = "Agregando…"; }
       accionUsuario({ accion: "crear", nombre: F.nombre, email: F.email, rol: F.rol, password: F.password, pedir_cambio: F.pedir }).then((r) => {
         if (r) { if (r.nuevo) US.ultimo = { email: F.email.trim().toLowerCase(), password: F.password }; US.form = { nombre: "", email: "", rol: "lector", password: "", pedir: true }; }
         render();

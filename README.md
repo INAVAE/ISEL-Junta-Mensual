@@ -53,6 +53,9 @@ cualquier cambio de un usuario de solo vista.
 - **Usuarios:** el administrador agrega personas con su correo, rol y una contraseña temporal. Al
   entrar por primera vez se les pide definir su contraseña (se puede desactivar para una cuenta de
   solo vista compartida). Si el correo ya existe por el PDI, solo se le da acceso.
+- **Contraseña personal:** mínimo 8 caracteres, con mayúscula, minúscula y número, sin espacios y
+  distinta a la temporal. La pantalla muestra las reglas y las va marcando al escribir; los campos de
+  contraseña tienen un ojo para ver lo que se escribió.
 - **Inactividad:** a los 9 minutos sin actividad aparece un aviso y a los 10 se cierra la sesión.
 - **Cambios en vivo:** cada 30 segundos la página trae lo que otros capturaron (compromisos, notas,
   campañas). Si el administrador carga reportes nuevos, aparece el aviso *Actualizar*.

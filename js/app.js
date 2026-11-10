@@ -1478,6 +1478,7 @@
   document.addEventListener("click", (ev) => {
     const t = ev.target.closest("button, a, label") || ev.target;
     const d = t.dataset || {};
+    if (d.ojo) { alternarOjo(t); return; }
     if ("salir" in d) { salir(); return; }
     if ("seguir" in d) { actividad(); return; }
     if ("recargarBase" in d) { recargarBase(); return; }
@@ -2819,11 +2820,38 @@
     document.body.classList.remove("en-pres", "lector");
     document.getElementById("app").innerHTML = `<div class="acceso"><div class="acceso-caja"><strong>ISEL</strong><p>Junta mensual de resultados de ventas</p>${contenido}</div></div>`;
   }
+  // Campo de contraseña con botón de ojo para mostrar u ocultar lo escrito
+  const OJO_VER = `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>`;
+  const OJO_OCULTAR = `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"/><path d="M10.6 5.1A10.4 10.4 0 0 1 12 5c6.4 0 10 7 10 7a17.6 17.6 0 0 1-3.2 4.1M6.6 6.6C3.8 8.4 2 12 2 12s3.6 7 10 7a9.9 9.9 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>`;
+  const campoPass = (id, auto, extra = "") => `<div class="pass-wrap"><input class="campo" type="password" id="${id}" autocomplete="${auto}" ${extra} required><button type="button" class="ojo" data-ojo="${id}" aria-label="Mostrar contraseña" aria-pressed="false" title="Mostrar contraseña">${OJO_VER}</button></div>`;
+  function alternarOjo(btn) {
+    const inp = document.getElementById(btn.dataset.ojo); if (!inp) return;
+    const ver = inp.type === "password"; inp.type = ver ? "text" : "password";
+    btn.innerHTML = ver ? OJO_OCULTAR : OJO_VER; btn.setAttribute("aria-pressed", String(ver));
+    const t = ver ? "Ocultar contraseña" : "Mostrar contraseña"; btn.setAttribute("aria-label", t); btn.title = t;
+    const n = inp.value.length; inp.focus(); try { inp.setSelectionRange(n, n); } catch (e) {}
+  }
+  // Reglas de la contraseña personal
+  let PASS_TEMP = null;
+  const REGLAS_PASS = [
+    ["largo", "Al menos 8 caracteres", (a) => a.length >= 8],
+    ["mayus", "Una letra mayúscula (A-Z)", (a) => /[A-ZÁÉÍÓÚÑ]/.test(a)],
+    ["minus", "Una letra minúscula (a-z)", (a) => /[a-záéíóúñ]/.test(a)],
+    ["num", "Un número (0-9)", (a) => /\d/.test(a)],
+    ["esp", "Sin espacios", (a) => a.length > 0 && !/\s/.test(a)],
+    ["temp", "Diferente a la contraseña temporal", (a) => a.length > 0 && a !== PASS_TEMP],
+  ];
+  const reglasActivas = () => REGLAS_PASS.filter((r) => r[0] !== "temp" || PASS_TEMP);
+  function pintarReglas() {
+    const a = ($("#c-pass1") || {}).value || "", b = ($("#c-pass2") || {}).value || "";
+    for (const [k, , f] of reglasActivas()) { const li = document.querySelector(`[data-regla="${k}"]`); if (li) li.classList.toggle("ok", f(a)); }
+    const li = document.querySelector('[data-regla="igual"]'); if (li) li.classList.toggle("ok", b.length > 0 && a === b);
+  }
   function pantallaLogin(mensaje, error) {
     cajaAcceso(`${mensaje ? `<div class="aviso info">${esc(mensaje)}</div>` : ""}
       <form id="f-login" style="display:flex;flex-direction:column;gap:12px">
         <label class="campo-label" for="l-email">Correo</label><input class="campo" type="email" id="l-email" autocomplete="username" required>
-        <label class="campo-label" for="l-pass">Contraseña</label><input class="campo" type="password" id="l-pass" autocomplete="current-password" required>
+        <label class="campo-label" for="l-pass">Contraseña</label>${campoPass("l-pass", "current-password")}
         ${error ? `<span class="error">${esc(error)}</span>` : ""}
         <button class="btn prim" type="submit" id="l-entrar">Entrar</button>
       </form><p class="nota-pie">¿Olvidaste tu contraseña? Pídele al administrador que te asigne una temporal.</p>`);
@@ -2831,26 +2859,33 @@
     $("#f-login").addEventListener("submit", async (e) => {
       e.preventDefault();
       const b = $("#l-entrar"); b.disabled = true; b.textContent = "Entrando…";
-      try { await NUBE.auth.entrar($("#l-email").value, $("#l-pass").value); await entrarConSesion(); }
+      try { await NUBE.auth.entrar($("#l-email").value, $("#l-pass").value); PASS_TEMP = $("#l-pass").value; await entrarConSesion(); }
       catch (x) { const em = $("#l-email").value; pantallaLogin(null, x.message); $("#l-email").value = em; $("#l-pass").focus(); }
     });
   }
   function pantallaCambio(forzado, error) {
-    cajaAcceso(`<form id="f-cambio" style="display:flex;flex-direction:column;gap:12px">
+    if (!forzado) PASS_TEMP = null;
+    cajaAcceso(`<form id="f-cambio" style="display:flex;flex-direction:column;gap:12px" novalidate>
         <div class="aviso info">${forzado ? "Entraste con una contraseña temporal. Define tu contraseña personal para continuar." : "Cambia tu contraseña."}</div>
-        <label class="campo-label" for="c-pass1">Nueva contraseña (mínimo 8 caracteres)</label><input class="campo" type="password" id="c-pass1" minlength="8" autocomplete="new-password" required>
-        <label class="campo-label" for="c-pass2">Repite la contraseña</label><input class="campo" type="password" id="c-pass2" minlength="8" autocomplete="new-password" required>
-        ${error ? `<span class="error">${esc(error)}</span>` : ""}
-        <div style="display:flex;gap:8px;justify-content:flex-end">${forzado ? `<button class="btn" type="button" data-salir>Salir</button>` : `<button class="btn" type="button" data-cancelar-cambio>Cancelar</button>`}<button class="btn prim" type="submit">Guardar contraseña</button></div>
+        <label class="campo-label" for="c-pass1">Nueva contraseña</label>${campoPass("c-pass1", "new-password", 'aria-describedby="reglas-pass"')}
+        <ul class="reglas-pass" id="reglas-pass" aria-live="polite"><li class="titulo">Tu contraseña debe tener:</li>${reglasActivas().map(([k, t]) => `<li data-regla="${k}">${t}</li>`).join("")}<li data-regla="igual">Escribirse igual en los dos campos</li></ul>
+        <label class="campo-label" for="c-pass2">Repite la contraseña</label>${campoPass("c-pass2", "new-password")}
+        <span class="error" id="c-error" ${error ? "" : "hidden"}>${esc(error || "")}</span>
+        <p class="nota-pie" style="margin:0">Ejemplo de una contraseña válida: <span class="mono">Ventas2026Isel</span> (no la uses tal cual). Usa el ojo para revisar lo que escribiste.</p>
+        <div style="display:flex;gap:8px;justify-content:flex-end">${forzado ? `<button class="btn" type="button" data-salir>Salir</button>` : `<button class="btn" type="button" data-cancelar-cambio>Cancelar</button>`}<button class="btn prim" type="submit" id="c-guardar">Guardar contraseña</button></div>
       </form>`);
     $("#c-pass1").focus();
+    const mostrarError = (m) => { const el = $("#c-error"); el.textContent = m; el.hidden = !m; };
+    $("#f-cambio").addEventListener("input", () => { pintarReglas(); mostrarError(""); });
     $("#f-cambio").addEventListener("submit", async (e) => {
       e.preventDefault();
       const a = $("#c-pass1").value, b = $("#c-pass2").value;
-      if (a.length < 8) return pantallaCambio(forzado, "La contraseña debe tener al menos 8 caracteres.");
-      if (a !== b) return pantallaCambio(forzado, "Las contraseñas no coinciden.");
-      try { await NUBE.auth.cambiarPassword(a); await NUBE.db.rpc("jm_password_cambiada"); toast("Contraseña actualizada"); await entrarConSesion(); }
-      catch (x) { pantallaCambio(forzado, x.message); }
+      const falta = reglasActivas().find(([, , f]) => !f(a));
+      if (falta) { mostrarError(`La contraseña no cumple: ${falta[1].toLowerCase()}.`); $("#c-pass1").focus(); return; }
+      if (a !== b) { mostrarError("Las contraseñas no coinciden: revísalas con el ojo."); $("#c-pass2").focus(); return; }
+      const btn = $("#c-guardar"); btn.disabled = true; btn.textContent = "Guardando…";
+      try { await NUBE.auth.cambiarPassword(a); await NUBE.db.rpc("jm_password_cambiada"); PASS_TEMP = null; toast("Contraseña actualizada"); await entrarConSesion(); }
+      catch (x) { btn.disabled = false; btn.textContent = "Guardar contraseña"; mostrarError(x.message); }
     });
   }
   async function entrarConSesion() {

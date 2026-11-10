@@ -397,3 +397,16 @@ table.tabla-op input[type="date"] { width: 130px; }
 .campo[readonly] { opacity: .8; }
 tr[data-op-fila] { cursor: default; }
 @media (max-width: 640px) { .form-grid .ancho2 { grid-column: span 1; } .modal.modal-ancho { padding: 14px; } }
+
+/* Contraseñas: botón de ojo y reglas */
+.pass-wrap { position: relative; }
+.pass-wrap .campo { padding-right: 44px; width: 100%; }
+.pass-wrap .ojo { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); width: 36px; height: 34px; display: inline-flex; align-items: center; justify-content: center; background: none; border: 0; border-radius: 4px; color: var(--ink2); cursor: pointer; }
+.pass-wrap .ojo:hover { color: var(--ink); }
+.pass-wrap .ojo:focus-visible { outline: 2px solid var(--accent, #c98a00); outline-offset: 1px; }
+.reglas-pass { list-style: none; margin: -4px 0 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; font-size: 13px; color: var(--ink2); display: grid; gap: 3px; }
+.reglas-pass li { display: flex; gap: 8px; align-items: center; }
+.reglas-pass li.titulo { font-weight: 600; color: var(--ink); }
+.reglas-pass li[data-regla]::before { content: "○"; width: 14px; text-align: center; color: var(--muted, #888); }
+.reglas-pass li.ok { color: var(--ok, #2a7d4f); }
+.reglas-pass li.ok::before { content: "✓"; color: var(--ok, #2a7d4f); font-weight: 700; }

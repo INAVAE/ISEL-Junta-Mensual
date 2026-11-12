@@ -1420,7 +1420,10 @@
         <span class="periodo-resumen">${esc(etiquetaPeriodo(L))} · ${L.length} ${L.length === 1 ? "mes" : "meses"} · vs ${esc(etiquetaPeriodo(anteriorDe(L)).replace(/^(T\d|S\d|Año) · /, ""))}</span></div></div></header>`;
   }
   function indice(lista, pref) {
-    return `<nav class="indice" aria-label="Bloques">${lista.map(([id, n, t, q]) => `<a href="#b-${id}" data-ir="${id}"><b>${n}</b><span>${t}</span>${q ? `<small>${q}</small>` : ""}</a>`).join("")}</nav>`;
+    const mini = !!(G.prefs && G.prefs.indiceMini);
+    return `<nav class="indice" aria-label="Bloques">
+      <button class="indice-pliegue" type="button" data-indice-mini aria-expanded="${!mini}" title="${mini ? "Mostrar el menú completo" : "Ocultar el menú y dejar solo los números"}"><span aria-hidden="true">${mini ? "»" : "«"}</span>${mini ? "" : "<em>Ocultar menú</em>"}</button>
+      <div class="indice-lista" id="indice-lista">${lista.map(([id, n, t, q]) => `<a href="#b-${id}" data-ir="${id}" title="${esc(`${n} · ${t}${q ? " — " + q : ""}`)}"><b>${n}</b><span>${t}</span>${q ? `<small>${q}</small>` : ""}</a>`).join("")}</div></nav>`;
   }
   const BLOQ_FN = [bSeguimiento, bMarcador, bTendencia, bContribucion, bDiagnostico, bSalud, bPortafolio, bPronostico, bAccion, bOtros];
   const SECC_FN = [sGeneral, sHistorico, sAnual, sCalor, sMezcla, sConcentracion, sClientes, sTipo, sSimulador];
@@ -1470,9 +1473,9 @@
     const focoId = document.activeElement && document.activeElement.id;
     let cuerpo;
     try {
-      if (UI.tab === "junta") cuerpo = `<div class="wrap">${indice(BLOQUES)}<main class="lienzo">${BLOQ_FN.map((f) => f()).join("")}</main></div>`;
-      else if (UI.tab === "analisis") cuerpo = `<div class="wrap">${indice(SECC2.map(([id, t], i) => [id, String.fromCharCode(65 + i), t, ""]))}<main class="lienzo"><div class="aviso info">Información de apoyo que no forma parte del orden de la junta. Usa el mismo periodo de la barra superior.</div>${SECC_FN.map((f) => f()).join("")}</main></div>`;
-      else if (UI.tab === "campanas") cuerpo = `<div class="wrap">${indice(CAMP_SECC.map(([id, n, t]) => [id, n, t, ""]))}<main class="lienzo">${CAMP_SECC.map((x) => x[3]()).join("")}</main></div>`;
+      if (UI.tab === "junta") cuerpo = `<div class="wrap${G.prefs && G.prefs.indiceMini ? " mini" : ""}">${indice(BLOQUES)}<main class="lienzo">${BLOQ_FN.map((f) => f()).join("")}</main></div>`;
+      else if (UI.tab === "analisis") cuerpo = `<div class="wrap${G.prefs && G.prefs.indiceMini ? " mini" : ""}">${indice(SECC2.map(([id, t], i) => [id, String.fromCharCode(65 + i), t, ""]))}<main class="lienzo"><div class="aviso info">Información de apoyo que no forma parte del orden de la junta. Usa el mismo periodo de la barra superior.</div>${SECC_FN.map((f) => f()).join("")}</main></div>`;
+      else if (UI.tab === "campanas") cuerpo = `<div class="wrap${G.prefs && G.prefs.indiceMini ? " mini" : ""}">${indice(CAMP_SECC.map(([id, n, t]) => [id, n, t, ""]))}<main class="lienzo">${CAMP_SECC.map((x) => x[3]()).join("")}</main></div>`;
       else if (UI.tab === "usuarios") cuerpo = `<div class="wrap sin-indice"><main class="lienzo">${vistaUsuarios()}</main></div>`;
       else if (UI.tab === "actividad") cuerpo = `<div class="wrap sin-indice"><main class="lienzo">${vistaActividad()}</main></div>`;
       else cuerpo = `<div class="wrap sin-indice"><main class="lienzo">${vistaDatos()}</main></div>`;
@@ -1489,11 +1492,19 @@
     if (focoId) { const el = document.getElementById(focoId); if (el) { el.focus(); if (el.setSelectionRange && el.type === "search") el.setSelectionRange(el.value.length, el.value.length); } }
     marcarIndice();
   }
+  // Alto real de la barra superior: el menú lateral se pega justo debajo y usa el resto de la pantalla
+  function medirCabecera() { const t = document.querySelector(".top"); if (t) document.documentElement.style.setProperty("--alto-cab", t.offsetHeight + "px"); }
+  window.addEventListener("resize", () => requestAnimationFrame(medirCabecera));
   function marcarIndice() {
+    medirCabecera();
     const links = $$(".indice a"); if (!links.length) return;
     let act = null;
     for (const a of links) { const s = document.getElementById("b-" + a.dataset.ir); if (s && s.getBoundingClientRect().top < 200) act = a; }
-    links.forEach((a) => a.classList.toggle("activo", a === (act || links[0])));
+    const nuevo = act || links[0];
+    if (!nuevo.classList.contains("activo")) {
+      links.forEach((a) => a.classList.toggle("activo", a === nuevo));
+      const L = document.getElementById("indice-lista"); if (L && L.scrollHeight > L.clientHeight) { const r = nuevo.getBoundingClientRect(), q = L.getBoundingClientRect(); if (r.top < q.top || r.bottom > q.bottom) L.scrollTop += r.top - q.top - q.height / 2 + r.height / 2; }
+    }
   }
   window.addEventListener("scroll", () => requestAnimationFrame(marcarIndice), { passive: true });
   function cerrarFoco() {
@@ -1536,6 +1547,7 @@
     if ((UI.tab === "campanas" || UI.foco) && eventosCampana(ev, "click")) return;
     // Cerrar selector abierto al hacer clic fuera
     if (UI.abierto && !ev.target.closest(".ms")) { UI.abierto = null; render(); return; }
+    if ("indiceMini" in d) { G.prefs = G.prefs || {}; G.prefs.indiceMini = !G.prefs.indiceMini; guardar(); render(); return; }
     if (d.tab) { if (d.tab !== UI.tab) usoAccion("vista:" + d.tab); UI.tab = d.tab; window.scrollTo(0, 0); render(); return; }
     if (d.foco) { usoAccion("ampliar"); UI.foco = d.foco; UI.scrollAntes = window.scrollY; render(); return; }
     if (d.presIr) { UI.foco = d.presIr; render(); $(".pres").scrollTop = 0; return; }

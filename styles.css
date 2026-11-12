@@ -94,7 +94,7 @@ a { color: var(--s1); }
 .indice a.activo b { color: var(--signal-ink); }
 .lienzo { display: flex; flex-direction: column; gap: 22px; min-width: 0; }
 
-.bloque { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); scroll-margin-top: 130px; min-width: 0; }
+.bloque { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); scroll-margin-top: calc(var(--alto-cab, 128px) + 12px); min-width: 0; }
 .bloque > header { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; padding: 14px 18px 12px; border-bottom: 1px solid var(--line); }
 .bloque-num { font-family: var(--f-mono); font-size: 12px; color: var(--signal-ink); background: var(--warn-bg); padding: 1px 7px; border-radius: 3px; }
 .bloque h2 { font-size: 24px; letter-spacing: .05em; text-transform: uppercase; }
@@ -486,4 +486,3 @@ table.t-marcador td.n { white-space: nowrap; }
   .wrap.mini .indice a { grid-template-columns: auto auto; padding: 5px 8px; }
   .wrap.mini .indice a b { width: auto; height: auto; border: 0; }
 }
-.bloque { scroll-margin-top: calc(var(--alto-cab, 128px) + 12px); }

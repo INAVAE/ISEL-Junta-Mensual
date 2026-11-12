@@ -350,13 +350,16 @@
     const AF = c.unMes ? afectaciones(c.Ja, c.Jm) : null;
     if (AF && (AF.salieron.length || Math.abs(AF.odooHoy - c.per.log) > 1)) aviso += `<div class="aviso info">${AF.salieron.length ? `${AF.salieron.length} facturas emitidas en ${MESES[c.Jm - 1]} por ${fmtM(AF.suma(AF.salieron))} se re-fecharon a otro mes. ` : ""}${Math.abs(AF.odooHoy - c.per.log) > 1 ? `Odoo registra hoy ${fmtM(AF.odooHoy)} para el mes (${fmtS(AF.odooHoy - c.per.log)} contra lo reportado). ` : ""}Detalle en el bloque 09.</div>`;
     const guion = `<b>${esc(c.etiqueta)}</b> cerró en <b>${fmtM(c.per.log)}</b> contra una meta de <b>${fmtM(c.per.meta)}</b>, equivalente a <b>${fmtP(cumP)}</b>. Acumulamos <b>${fmtM(c.acum.log)}</b> contra <b>${fmtM(c.acum.meta)}</b>, con ${c.acum.log - c.acum.meta < 0 ? "un déficit" : "un superávit"} de <b>${fmtM(Math.abs(c.acum.log - c.acum.meta))}</b>. Respecto al mes anterior ${d.delta >= 0 ? "recuperamos" : "ampliamos la brecha en"} <b>${fmtM(Math.abs(d.delta))}</b>${restantes > 0 ? ` y para alcanzar la meta anual de <b>${fmtM(c.mAnual, 1)}</b> necesitamos vender <b>${fmtM(necesario)}</b> por mes en los ${restantes} meses restantes (${fmtP(div(necesario, promedio))} del promedio mensual actual)` : ""}.`;
-    const tablaRes = `<div class="tabla-wrap" style="max-height:none"><table class="t"><thead><tr><th>Resultado</th><th class="n">${esc(c.etiqueta)}</th><th class="n">Acumulado a ${MC[c.Jm - 1]} ${c.Ja}</th></tr></thead><tbody>
-      <tr><td>Venta</td>${c.unMes ? celdaNum("h", `${c.Ja}-${c.Jm}-total-total`, "log", c.per.log, tot(c.Ja, c.Jm)?.edL) : `<td class="n">${fmt$(c.per.log)}</td>`}<td class="n">${fmt$(c.acum.log)}</td></tr>
-      <tr><td>Meta</td>${c.unMes ? celdaNum("h", `${c.Ja}-${c.Jm}-total-total`, "meta", c.per.meta, tot(c.Ja, c.Jm)?.edM) : `<td class="n">${fmt$(c.per.meta)}</td>`}<td class="n">${fmt$(c.acum.meta)}</td></tr>
-      <tr><td>Cumplimiento</td><td class="n">${sem(cumP)}</td><td class="n">${sem(cumA)}</td></tr>
-      <tr><td>Brecha contra meta</td><td class="n ${c.per.log - c.per.meta < 0 ? "neg" : "pos"}">${fmt$(c.per.log - c.per.meta)}</td><td class="n ${c.acum.log - c.acum.meta < 0 ? "neg" : "pos"}">${fmt$(c.acum.log - c.acum.meta)}</td></tr>
-      <tr><td>Venta ${c.Ja - 1} (mismo periodo)</td><td class="n">${fmt$(c.perAnt?.log)}</td><td class="n">${fmt$(c.acumAnt?.log)}</td></tr>
-      <tr><td>Crecimiento vs ${c.Ja - 1}</td><td class="n ${crecP < 0 ? "neg" : "pos"}">${fmtPs(crecP, 1)}</td><td class="n ${crecA < 0 ? "neg" : "pos"}">${fmtPs(crecA, 1)}</td></tr>
+    // Si el periodo ya es el acumulado del año (p. ej. Año · Ene–Oct), una sola columna basta
+    const soloAcum = c.L.length === c.Jm && c.L.every(([a]) => a === c.Ja) && Math.abs(c.per.log - c.acum.log) < 1 && Math.abs(c.per.meta - c.acum.meta) < 1;
+    const col2 = (html) => (soloAcum ? "" : html);
+    const tablaRes = `<div class="tabla-wrap" style="max-height:none"><table class="t t-marcador"><thead><tr><th>Resultado</th><th class="n">${esc(c.etiqueta)}</th>${col2(`<th class="n">Acumulado a ${MC[c.Jm - 1]} ${c.Ja}</th>`)}</tr></thead><tbody>
+      <tr><td>Venta</td>${c.unMes ? celdaNum("h", `${c.Ja}-${c.Jm}-total-total`, "log", c.per.log, tot(c.Ja, c.Jm)?.edL) : `<td class="n">${fmt$(c.per.log)}</td>`}${col2(`<td class="n">${fmt$(c.acum.log)}</td>`)}</tr>
+      <tr><td>Meta</td>${c.unMes ? celdaNum("h", `${c.Ja}-${c.Jm}-total-total`, "meta", c.per.meta, tot(c.Ja, c.Jm)?.edM) : `<td class="n">${fmt$(c.per.meta)}</td>`}${col2(`<td class="n">${fmt$(c.acum.meta)}</td>`)}</tr>
+      <tr><td>Cumplimiento</td><td class="n">${sem(cumP)}</td>${col2(`<td class="n">${sem(cumA)}</td>`)}</tr>
+      <tr><td>Brecha contra meta</td><td class="n ${c.per.log - c.per.meta < 0 ? "neg" : "pos"}">${fmt$(c.per.log - c.per.meta)}</td>${col2(`<td class="n ${c.acum.log - c.acum.meta < 0 ? "neg" : "pos"}">${fmt$(c.acum.log - c.acum.meta)}</td>`)}</tr>
+      <tr><td>Venta ${c.Ja - 1} (mismo periodo)</td><td class="n">${fmt$(c.perAnt?.log)}</td>${col2(`<td class="n">${fmt$(c.acumAnt?.log)}</td>`)}</tr>
+      <tr><td>Crecimiento vs ${c.Ja - 1}</td><td class="n ${crecP < 0 ? "neg" : "pos"}">${fmtPs(crecP, 1)}</td>${col2(`<td class="n ${crecA < 0 ? "neg" : "pos"}">${fmtPs(crecA, 1)}</td>`)}</tr>
       </tbody></table></div>`;
     const cuerpo = `${enCurso ? `<div class="aviso">El periodo incluye un mes que todavía no cierra; sus cifras son parciales.</div>` : ""}${aviso}
       <div class="marcador">
@@ -368,7 +371,7 @@
       </div>
       <div class="diag-frase"><span class="lampara" style="background:var(--${d.cl})"></span><strong>${esc(d.txt)}</strong>
         <span style="color:var(--ink2);font-size:13px">El déficit acumulado pasó de ${fmtM(d.defP)} a ${fmtM(d.defJ)}.</span></div>
-      <div class="grid-6-4">
+      <div class="grid-marcador">
         <div><div class="sub">Guion para abrir la junta <span class="der"><button class="btn chico" data-copiar="guion" type="button">Copiar texto</button></span></div><p class="guion" id="guion">${guion}</p>
           <label class="campo-label" for="diag-txt">Diagnóstico en una frase</label>
           <textarea class="campo" id="diag-txt" data-junta-campo="diagnostico" placeholder="${esc(d.txt)}. Ej.: seguimos ${fmtP(1 - (cumA || 0))} debajo del objetivo; en el mes ${d.estado} ${fmtM(Math.abs(d.delta))}.">${esc(J.diagnostico || "")}</textarea></div>

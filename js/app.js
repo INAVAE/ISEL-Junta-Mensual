@@ -686,7 +686,10 @@
 
   /* ---------------------------------------------------------- 08 Acción */
   const ESTADOS = [["pendiente", "Pendiente"], ["en_proceso", "En proceso"], ["cumplido", "Cumplido"], ["no_cumplido", "No cumplido"], ["reprogramado", "Reprogramado"], ["cancelado", "Cancelado"]];
+  // Orden ascendente: junta más antigua primero y, dentro de cada junta, por número de prioridad
+  const ordenComp = (a, b) => (a.junta < b.junta ? -1 : a.junta > b.junta ? 1 : (fin(+a.prioridad) && String(a.prioridad).trim() !== "" ? +a.prioridad : 999) - (fin(+b.prioridad) && String(b.prioridad).trim() !== "" ? +b.prioridad : 999));
   function tablaCompromisos(lista, conJunta) {
+    lista = [...lista].sort(ordenComp);
     if (!lista.length) return `<div class="vacio">Sin compromisos con este filtro.</div>`;
     const campo = (x, k, etq, html, cls = "") => `<div class="cf ${cls}"><label for="cf-${x.id}-${k}">${etq}</label>${html}</div>`;
     const area = (x, k, etq, cls, ph = "") => campo(x, k, etq, `<textarea id="cf-${x.id}-${k}" rows="2" data-cf="${k}" ${ph ? `placeholder="${ph}"` : ""}>${esc(x[k])}</textarea>`, cls);
@@ -1559,7 +1562,7 @@
     if (d.an && t.tagName === "SELECT") { const A = G.analisis[ctx().clave]; A[d.an][+d.i][d.campo] = t.value; guardar(); render(); return; }
     if (t.id === "mes-sin-fecha" || t.id === "anio-sin-fecha") return;
     if (d.cf === "estado") { const x = G.compromisos.find((z) => z.id === t.closest("[data-comp]").dataset.comp); if (x) { x.estado = t.value; if (t.value === "cumplido") x.avance = 100; guardar(); render(); } return; }
-    if (d.cf === "avance") { render(); return; }
+    if (d.cf === "avance" || d.cf === "prioridad") { render(); return; }
     if (t.id === "archivos-excel") { cargarExcel([...t.files]); return; }
     if (t.id === "archivo-resp") { const f = t.files[0]; if (!f) return; f.text().then((s) => importar(JSON.parse(s))).catch(() => toast("El archivo no es un respaldo válido.")); return; }
   });

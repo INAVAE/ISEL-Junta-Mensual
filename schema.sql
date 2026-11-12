@@ -179,3 +179,36 @@ alter table public.jm_campanas
 -- Partidas facturadas de una oportunidad ganada (piezas vendidas reales)
 alter table public.jm_campana_oport
   add column if not exists venta jsonb not null default '[]'::jsonb;
+
+-- ---------------------------------------------- Uso de la herramienta ---
+-- Una fila por ingreso: inicio, última señal, tiempo activo y tiempo por sección.
+-- Cada usuario solo escribe sus propias filas; el administrador ve todas.
+create table if not exists public.jm_sesiones (
+  id           uuid primary key,
+  user_id      uuid not null default auth.uid() references auth.users (id) on delete cascade,
+  email        text,
+  inicio       timestamptz not null default now(),
+  ultimo       timestamptz not null default now(),
+  fin          timestamptz,
+  activo_seg   integer not null default 0 check (activo_seg >= 0),
+  tiempo       jsonb not null default '{}'::jsonb,
+  acciones     jsonb not null default '{}'::jsonb,
+  cierre       text,
+  dispositivo  text
+);
+create index if not exists jm_sesiones_inicio on public.jm_sesiones (inicio desc);
+create index if not exists jm_sesiones_usuario on public.jm_sesiones (user_id, inicio desc);
+alter table public.jm_sesiones enable row level security;
+revoke all on public.jm_sesiones from anon;
+drop policy if exists jm_sesiones_leer on public.jm_sesiones;
+drop policy if exists jm_sesiones_alta on public.jm_sesiones;
+drop policy if exists jm_sesiones_cambio on public.jm_sesiones;
+drop policy if exists jm_sesiones_baja on public.jm_sesiones;
+create policy jm_sesiones_leer on public.jm_sesiones for select to authenticated
+  using (user_id = (select auth.uid()) or (select private.jm_rol()) = 'admin');
+create policy jm_sesiones_alta on public.jm_sesiones for insert to authenticated
+  with check (user_id = (select auth.uid()) and (select private.jm_rol()) is not null);
+create policy jm_sesiones_cambio on public.jm_sesiones for update to authenticated
+  using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
+create policy jm_sesiones_baja on public.jm_sesiones for delete to authenticated
+  using ((select private.jm_rol()) = 'admin');

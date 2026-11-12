@@ -57,6 +57,11 @@ cualquier cambio de un usuario de solo vista.
   distinta a la temporal. La pantalla muestra las reglas y las va marcando al escribir; los campos de
   contraseña tienen un ojo para ver lo que se escribió.
 - **Inactividad:** a los 9 minutos sin actividad aparece un aviso y a los 10 se cierra la sesión.
+- **Actividad (solo administrador):** registra cada ingreso: quién, cuándo, duración, tiempo activo
+  (página visible y con uso en el último minuto), secciones vistas, cambios guardados, cómo terminó la
+  sesión y el dispositivo. Muestra el ranking de uso, quién no ha entrado en el periodo (7, 30, 90
+  días o todo) y el uso por día. Requiere la tabla `jm_sesiones` (sección *Uso de la herramienta*
+  de `schema.sql`).
 - **Cambios en vivo:** cada 30 segundos la página trae lo que otros capturaron (compromisos, notas,
   campañas). Si el administrador carga reportes nuevos, aparece el aviso *Actualizar*.
 

@@ -49,7 +49,7 @@
   let guardadoPend = null;
   function guardar() {
     try { localStorage.setItem(LS_PREFS, JSON.stringify(G.prefs || {})); } catch (e) {}
-    if (NUBE) { if (esAdmin()) programarSync(); return; }
+    if (NUBE) { if (esAdmin()) { programarSync(); if (Date.now() - USO.ultimaEd > 10000) { USO.ultimaEd = Date.now(); usoAccion("cambios"); } } return; }
     clearTimeout(guardadoPend);
     guardadoPend = setTimeout(() => {
       try { localStorage.setItem(LS, JSON.stringify(G)); } catch (e) { toast("Este navegador no permite guardar. Descarga un respaldo para no perder cambios."); }
@@ -1406,7 +1406,7 @@
       rango: `<label for="p-desde">Del</label><input type="date" id="p-desde" value="${P.desde}"><label for="p-hasta">al</label><input type="date" id="p-hasta" value="${P.hasta}">`,
     };
     return `<header class="top"><div class="top-in"><div class="marca"><strong>ISEL</strong><span>Junta mensual de resultados de ventas</span></div>
-      <nav class="tabs" role="tablist">${[["junta", "Junta mensual"], ["analisis", "Análisis adicional"], ["campanas", "Campañas"], ["datos", "Datos"], ...(NUBE && esAdmin() ? [["usuarios", "Usuarios"]] : [])].map(([v, t]) => `<button class="tab" role="tab" data-tab="${v}" aria-selected="${UI.tab === v}">${t}</button>`).join("")}</nav>
+      <nav class="tabs" role="tablist">${[["junta", "Junta mensual"], ["analisis", "Análisis adicional"], ["campanas", "Campañas"], ["datos", "Datos"], ...(NUBE && esAdmin() ? [["usuarios", "Usuarios"], ["actividad", "Actividad"]] : [])].map(([v, t]) => `<button class="tab" role="tab" data-tab="${v}" aria-selected="${UI.tab === v}">${t}</button>`).join("")}</nav>
       ${esAdmin() ? `<button class="chip-btn" data-modo-ed aria-pressed="${UI.modoEdicion}" type="button">${UI.modoEdicion ? "✎ Modificando cifras" : "✎ Modificar cifras"}</button>` : `<span class="chip-rol">Solo lectura</span>`}
       <button class="chip-btn" data-tendencias aria-pressed="${G.prefs.tendencias !== false}" type="button" title="Mostrar u ocultar las líneas de tendencia">↗ Tendencias</button>
       <button class="chip-btn" data-tema type="button" title="Cambiar tema claro / oscuro">◐</button>
@@ -1471,6 +1471,7 @@
       else if (UI.tab === "analisis") cuerpo = `<div class="wrap">${indice(SECC2.map(([id, t], i) => [id, String.fromCharCode(65 + i), t, ""]))}<main class="lienzo"><div class="aviso info">Información de apoyo que no forma parte del orden de la junta. Usa el mismo periodo de la barra superior.</div>${SECC_FN.map((f) => f()).join("")}</main></div>`;
       else if (UI.tab === "campanas") cuerpo = `<div class="wrap">${indice(CAMP_SECC.map(([id, n, t]) => [id, n, t, ""]))}<main class="lienzo">${CAMP_SECC.map((x) => x[3]()).join("")}</main></div>`;
       else if (UI.tab === "usuarios") cuerpo = `<div class="wrap sin-indice"><main class="lienzo">${vistaUsuarios()}</main></div>`;
+      else if (UI.tab === "actividad") cuerpo = `<div class="wrap sin-indice"><main class="lienzo">${vistaActividad()}</main></div>`;
       else cuerpo = `<div class="wrap sin-indice"><main class="lienzo">${vistaDatos()}</main></div>`;
     } catch (e) {
       console.error(e);
@@ -1528,11 +1529,12 @@
     if (UI.modal && eventosModal(ev, "click")) return;
     if (d.tendencias !== undefined) { G.prefs.tendencias = G.prefs.tendencias === false; guardar(); render(); return; }
     if (UI.tab === "usuarios" && eventosUsuarios(ev, "click")) return;
+    if (UI.tab === "actividad" && eventosActividad(ev, "click")) return;
     if ((UI.tab === "campanas" || UI.foco) && eventosCampana(ev, "click")) return;
     // Cerrar selector abierto al hacer clic fuera
     if (UI.abierto && !ev.target.closest(".ms")) { UI.abierto = null; render(); return; }
-    if (d.tab) { UI.tab = d.tab; window.scrollTo(0, 0); render(); return; }
-    if (d.foco) { UI.foco = d.foco; UI.scrollAntes = window.scrollY; render(); return; }
+    if (d.tab) { if (d.tab !== UI.tab) usoAccion("vista:" + d.tab); UI.tab = d.tab; window.scrollTo(0, 0); render(); return; }
+    if (d.foco) { usoAccion("ampliar"); UI.foco = d.foco; UI.scrollAntes = window.scrollY; render(); return; }
     if (d.presIr) { UI.foco = d.presIr; render(); $(".pres").scrollTop = 0; return; }
     if ("presCerrar" in d) { cerrarFoco(); return; }
     if ("presFull" in d) { const de = document.documentElement; const p = document.fullscreenElement ? document.exitFullscreen() : de.requestFullscreen ? de.requestFullscreen() : null; if (p && p.catch) p.catch(() => toast("Este navegador no permite pantalla completa aquí; usa F11 o abre el módulo en otra pestaña.")); else if (!p) toast("Este navegador no permite pantalla completa aquí."); return; }
@@ -2863,8 +2865,137 @@
   document.addEventListener("visibilitychange", () => { if (!document.hidden && YO) { if (Date.now() - actividadCompartida() >= INACT_MS) salir("Tu sesión se cerró después de 10 minutos sin actividad."); else revisarCambios(); } });
   setInterval(() => revisarCambios(), 30000);
 
+  /* ---------------------------------------------- uso de la herramienta */
+  // Cada ingreso es una fila en jm_sesiones. Cada 15 s se suma tiempo activo (pestaña visible y
+  // actividad en el último minuto) a la sección que está abierta; cada minuto se envía al servidor.
+  const USO = { id: null, activo: 0, tiempo: {}, acciones: {}, reloj: null, envio: 0, desactivado: false, ultimaEd: 0 };
+  const PASO_USO = 15;
+  const NOMBRE_SECC = { junta: "Junta mensual", analisis: "Análisis adicional", campanas: "Campañas", datos: "Datos", usuarios: "Usuarios", actividad: "Actividad", ampliar: "Vista ampliada" };
+  const seccionUso = () => (UI.foco ? "ampliar" : UI.tab || "junta");
+  function dispositivo() {
+    const u = navigator.userAgent;
+    const so = /Windows/.test(u) ? "Windows" : /iPhone|iPad/.test(u) ? "iOS" : /Android/.test(u) ? "Android" : /Mac OS/.test(u) ? "Mac" : /Linux/.test(u) ? "Linux" : "Otro";
+    const nav = /Edg\//.test(u) ? "Edge" : /Chrome\//.test(u) ? "Chrome" : /Firefox\//.test(u) ? "Firefox" : /Safari\//.test(u) ? "Safari" : "Navegador";
+    return `${nav} · ${so}${window.innerWidth < 760 ? " · móvil" : ""}`;
+  }
+  function usoAccion(k) { if (!USO.id) return; USO.acciones[k] = (USO.acciones[k] || 0) + 1; }
+  async function usoIniciar() {
+    if (!NUBE || !YO || USO.desactivado || USO.id) return;
+    const id = nuevoId(), ahora = new Date().toISOString();
+    try {
+      await NUBE.db.guardar("jm_sesiones", [{ id, user_id: YO.id, email: YO.email, inicio: ahora, ultimo: ahora, dispositivo: dispositivo() }]);
+      Object.assign(USO, { id, activo: 0, tiempo: {}, acciones: {}, envio: Date.now() });
+      usoAccion("vista:" + seccionUso());
+      clearInterval(USO.reloj); USO.reloj = setInterval(usoTick, PASO_USO * 1000);
+    } catch (e) { if (e.status === 404 || /does not exist|relation|schema cache/i.test(e.message)) USO.desactivado = true; }
+  }
+  function usoTick() {
+    if (!USO.id || !YO) return;
+    if (!document.hidden && Date.now() - ultimaAct < 60000) { const s = seccionUso(); USO.activo += PASO_USO; USO.tiempo[s] = (USO.tiempo[s] || 0) + PASO_USO; }
+    if (Date.now() - USO.envio >= 60000) usoEnviar();
+  }
+  function datosUso(cierre) {
+    const d = { ultimo: new Date().toISOString(), activo_seg: USO.activo, tiempo: USO.tiempo, acciones: USO.acciones };
+    if (cierre) { d.fin = d.ultimo; d.cierre = cierre; }
+    return d;
+  }
+  async function usoEnviar(cierre) {
+    if (!USO.id || !NUBE) return;
+    USO.envio = Date.now(); const id = USO.id;
+    if (cierre) { clearInterval(USO.reloj); USO.id = null; }
+    try { await NUBE.db.cambiar("jm_sesiones", { id }, datosUso(cierre)); } catch (e) {}
+  }
+  // Al cerrar la pestaña: envío que sobrevive a la descarga de la página
+  window.addEventListener("pagehide", () => {
+    if (!USO.id || !NUBE) return; const s = NUBE.auth.sesion(); const C = window.JM_CONFIG; if (!s || !C) return;
+    try { fetch(`${C.url}/rest/v1/jm_sesiones?id=eq.${USO.id}`, { method: "PATCH", keepalive: true, headers: { apikey: C.llave, Authorization: "Bearer " + s.access_token, "Content-Type": "application/json", Prefer: "return=minimal" }, body: JSON.stringify(datosUso("cerró la página")) }); } catch (e) {}
+  });
+
+  /* ------------------------------------------- vista de actividad (admin) */
+  const ACT = { filas: null, cargando: false, error: "", dias: 30 };
+  const fmtDur = (s) => { s = Math.round(s || 0); if (s < 60) return s ? "< 1 min" : "0 min"; const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60); return h ? `${h} h ${String(m).padStart(2, "0")} min` : `${m} min`; };
+  const fechaHoraCorta = (iso) => (iso ? new Date(iso).toLocaleString("es-MX", { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" }) : "—");
+  const diaLocal = (iso) => isoLocal(new Date(iso));
+  async function cargarActividad() {
+    if (!NUBE) return;
+    ACT.cargando = true; ACT.error = "";
+    if (US.lista === null && !US.cargando) cargarUsuarios();
+    try {
+      const filtro = ACT.dias ? { inicio: ["gte", new Date(Date.now() - ACT.dias * 864e5).toISOString()] } : {};
+      ACT.filas = await NUBE.db.leer("jm_sesiones", { filtro, orden: "inicio.desc" });
+    } catch (e) { ACT.error = e.status === 404 || /does not exist|relation|schema cache/i.test(e.message) ? "falta-tabla" : e.message; ACT.filas = null; }
+    ACT.cargando = false; if (UI.tab === "actividad") render();
+  }
+  function vistaActividad() {
+    if (!NUBE || !esAdmin()) return `<section class="bloque"><div class="bloque-cuerpo"><div class="aviso">Solo los administradores pueden ver esta sección.</div></div></section>`;
+    if (ACT.filas === null && !ACT.cargando && !ACT.error) cargarActividad();
+    const cab = `<header><h2>Uso de la herramienta</h2><span class="pregunta">Quién entra, cuándo y cuánto tiempo</span></header>`;
+    if (ACT.error === "falta-tabla") return `<section class="bloque" id="b-actividad">${cab}<div class="bloque-cuerpo"><div class="aviso">Falta crear la tabla <span class="mono">jm_sesiones</span> en Supabase. Ejecuta en <b>SQL Editor</b> la sección <i>Uso de la herramienta</i> de <span class="mono">schema.sql</span> y vuelve a abrir esta pestaña. El registro de accesos empieza en ese momento.</div></div></section>`;
+    if (ACT.error) return `<section class="bloque" id="b-actividad">${cab}<div class="bloque-cuerpo"><div class="aviso">${esc(ACT.error)}</div></div></section>`;
+    if (ACT.filas === null || US.lista === null) return `<section class="bloque" id="b-actividad">${cab}<div class="bloque-cuerpo"><div class="cargando" style="padding:20px">Cargando actividad…</div></div></section>`;
+    const C = colores(); const S = [...ACT.filas].sort((a, b) => String(b.inicio).localeCompare(String(a.inicio)));
+    const ahora = Date.now();
+    const durS = (x) => Math.max(0, (new Date(x.fin || x.ultimo) - new Date(x.inicio)) / 1000);
+    // Resumen por usuario (todos los que tienen acceso, aunque no hayan entrado)
+    const porU = new Map((US.lista || []).map((u) => [u.user_id, { u, ses: [], activo: 0, dur: 0, dias: new Set(), tiempo: {}, cambios: 0, ultimo: null }]));
+    for (const x of S) {
+      if (!porU.has(x.user_id)) porU.set(x.user_id, { u: { user_id: x.user_id, email: x.email, nombre: "", rol: "—", activo: false }, ses: [], activo: 0, dur: 0, dias: new Set(), tiempo: {}, cambios: 0, ultimo: null });
+      const r = porU.get(x.user_id); r.ses.push(x); r.activo += x.activo_seg || 0; r.dur += durS(x); r.dias.add(diaLocal(x.inicio));
+      for (const [k, v] of Object.entries(x.tiempo || {})) r.tiempo[k] = (r.tiempo[k] || 0) + v;
+      r.cambios += (x.acciones || {}).cambios || 0;
+      if (!r.ultimo || x.inicio > r.ultimo) r.ultimo = x.inicio;
+    }
+    const R = [...porU.values()].sort((a, b) => b.activo - a.activo || b.ses.length - a.ses.length);
+    const conUso = R.filter((r) => r.ses.length), sinUso = R.filter((r) => !r.ses.length && r.u.activo !== false);
+    const totAct = R.reduce((s, r) => s + r.activo, 0);
+    const periodo = ACT.dias ? `los últimos ${ACT.dias} días` : "todo el registro";
+    const primera = S.length ? S[S.length - 1].inicio : null;
+    // Gráfica: minutos activos por usuario
+    chart("g-uso-u", { type: "bar", data: { labels: R.map((r) => r.u.nombre || r.u.email.split("@")[0]), datasets: [{ label: "Minutos activos", data: R.map((r) => Math.round(r.activo / 60)), backgroundColor: R.map((r) => (r.ses.length ? C.s1 : C.meta)), maxBarThickness: 22 }] },
+      options: { indexAxis: "y", plugins: { legend: { display: false }, tooltip: { callbacks: { label: (x) => { const r = R[x.dataIndex]; return `${fmtDur(r.activo)} activo · ${r.ses.length} ingresos · ${r.dias.size} días`; } } } }, scales: { x: { beginAtZero: true, grid: { color: C.grid }, ticks: { precision: 0 } }, y: { grid: { display: false }, ticks: { autoSkip: false } } } } });
+    // Gráfica: uso por día
+    const nDias = ACT.dias || Math.max(7, Math.ceil((ahora - new Date(primera || ahora)) / 864e5) + 1);
+    const dias = []; for (let i = nDias - 1; i >= 0; i--) dias.push(isoLocal(new Date(ahora - i * 864e5)));
+    const usDia = dias.map((d) => new Set(S.filter((x) => diaLocal(x.inicio) === d).map((x) => x.user_id)).size);
+    const minDia = dias.map((d) => Math.round(S.filter((x) => diaLocal(x.inicio) === d).reduce((s, x) => s + (x.activo_seg || 0), 0) / 60));
+    chart("g-uso-d", { type: "bar", data: { labels: dias.map((d) => `${+d.slice(8)} ${MC[+d.slice(5, 7) - 1]}`), datasets: [{ type: "bar", label: "Usuarios distintos", data: usDia, backgroundColor: C.s1, yAxisID: "y", maxBarThickness: 18 }, { type: "line", label: "Minutos activos", data: minDia, borderColor: C.meta, backgroundColor: C.meta, pointRadius: 2, yAxisID: "y2" }] },
+      options: { scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 12, maxRotation: 0 } }, y: { beginAtZero: true, ticks: { precision: 0 }, grid: { color: C.grid }, title: { display: true, text: "usuarios" } }, y2: { beginAtZero: true, position: "right", grid: { display: false }, title: { display: true, text: "minutos" } } } } });
+    const topSecc = (t) => Object.entries(t).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${NOMBRE_SECC[k] || k} ${fmtDur(v)}`).join(" · ") || "—";
+    const estadoU = (r) => (!r.ses.length ? `<span class="sem bad">Sin uso en ${ACT.dias ? `${ACT.dias} días` : "el registro"}</span>` : r.ultimo && ahora - new Date(r.ultimo) > 14 * 864e5 ? `<span class="sem warn">Hace ${Math.floor((ahora - new Date(r.ultimo)) / 864e5)} días</span>` : `<span class="sem ok">Activo</span>`);
+    const tablaU = `<div class="tabla-wrap" style="max-height:none"><table class="t"><thead><tr><th>#</th><th>Usuario</th><th>Rol</th><th class="n">Ingresos</th><th class="n">Días con uso</th><th class="n">Tiempo activo</th><th class="n">Promedio por ingreso</th><th class="n">% del uso</th><th>Secciones más vistas</th><th class="n">Cambios</th><th>Último ingreso</th><th>Estado</th></tr></thead><tbody>
+      ${R.map((r, i) => `<tr${r.ses.length ? "" : ' class="sin-uso"'}><td class="n">${r.ses.length ? i + 1 : "—"}</td><td class="nombre"><b>${esc(r.u.nombre || "—")}</b><div class="cod" style="margin:0">${esc(r.u.email || "")}</div></td><td>${r.u.rol === "admin" ? "Administrador" : r.u.rol === "lector" ? "Solo ver" : "—"}</td>
+        <td class="n">${r.ses.length}</td><td class="n">${r.dias.size}</td><td class="n"><b>${fmtDur(r.activo)}</b></td><td class="n">${r.ses.length ? fmtDur(r.activo / r.ses.length) : "—"}</td><td class="n">${totAct ? fmtP(r.activo / totAct) : "—"}</td>
+        <td style="font-size:13px">${esc(topSecc(r.tiempo))}</td><td class="n">${r.u.rol === "admin" ? r.cambios : "—"}</td><td class="mono" style="font-size:12px;white-space:nowrap">${r.ultimo ? fechaHoraCorta(r.ultimo) : "—"}</td><td>${estadoU(r)}</td></tr>`).join("")}</tbody></table></div>`;
+    const recientes = S.slice(0, 40);
+    const nom = (id, email) => { const r = porU.get(id); return esc((r && r.u.nombre) || (email || "").split("@")[0]); };
+    const tablaS = `<div class="tabla-wrap"><table class="t"><thead><tr><th>Usuario</th><th>Entrada</th><th class="n">Duración</th><th class="n">Tiempo activo</th><th>Secciones</th><th>Salida</th><th>Dispositivo</th></tr></thead><tbody>
+      ${recientes.map((x) => { const abierta = !x.fin && ahora - new Date(x.ultimo) < 150000; return `<tr><td class="nombre">${nom(x.user_id, x.email)}</td><td class="mono" style="font-size:12px;white-space:nowrap">${fechaHoraCorta(x.inicio)}</td><td class="n">${fmtDur(durS(x))}</td><td class="n">${fmtDur(x.activo_seg)}</td><td style="font-size:13px">${esc(topSecc(x.tiempo || {}))}</td><td>${abierta ? '<span class="sem ok">En línea</span>' : esc(x.cierre || "sin aviso de salida")}</td><td style="font-size:12px">${esc(x.dispositivo || "—")}</td></tr>`; }).join("") || `<tr><td colspan="7">Sin ingresos en el periodo.</td></tr>`}</tbody></table></div>`;
+    const enLinea = new Set(S.filter((x) => !x.fin && ahora - new Date(x.ultimo) < 150000).map((x) => x.user_id)).size;
+    return `<section class="bloque" id="b-actividad">${cab}<div class="bloque-cuerpo">
+      <div class="sub" style="margin:0;flex-wrap:wrap;gap:8px">${seg("uso-dias", [["7", "7 días"], ["30", "30 días"], ["90", "90 días"], ["0", "Todo"]], String(ACT.dias))}<span class="der"><button class="btn chico" type="button" data-act-recargar>Actualizar</button></span></div>
+      <div class="tira"><div class="celda"><label>Usuarios que entraron</label><div class="valor">${conUso.length} <small style="font-size:16px">de ${R.filter((r) => r.u.activo !== false).length}</small></div><small>en ${periodo}</small></div>
+        <div class="celda"><label>Ingresos</label><div class="valor">${S.length}</div><small>${enLinea ? `${enLinea} en línea ahora` : "nadie en línea ahora"}</small></div>
+        <div class="celda"><label>Tiempo activo total</label><div class="valor">${fmtDur(totAct)}</div><small>${S.length ? `${fmtDur(totAct / S.length)} por ingreso` : ""}</small></div>
+        <div class="celda"><label>Más activo</label><div class="valor" style="font-size:20px;line-height:1.2">${conUso[0] ? esc(conUso[0].u.nombre || conUso[0].u.email) : "—"}</div><small>${conUso[0] ? `${fmtDur(conUso[0].activo)} · ${conUso[0].ses.length} ingresos` : ""}</small></div></div>
+      ${sinUso.length ? `<div class="aviso">Sin uso en ${periodo}: ${sinUso.map((r) => `<b>${esc(r.u.nombre || r.u.email)}</b>`).join(", ")}.</div>` : ""}
+      <div class="grid2"><div><div class="sub">Tiempo activo por usuario (minutos)</div><div class="graf" style="height:${Math.max(200, R.length * 30 + 50)}px"><canvas id="g-uso-u" role="img" aria-label="Minutos activos por usuario"></canvas></div></div>
+        <div><div class="sub">Uso por día</div><div class="graf"><canvas id="g-uso-d" role="img" aria-label="Usuarios y minutos por día"></canvas></div></div></div>
+      <div><div class="sub">Detalle por usuario</div>${tablaU}</div>
+      <div><div class="sub">Ingresos recientes</div>${tablaS}</div>
+      <p class="nota-pie"><b>Tiempo activo:</b> minutos con la página visible y con movimiento, clics o teclas en el último minuto; una pestaña abierta y olvidada no suma. <b>Duración:</b> de la entrada a la última señal. <b>Cambios:</b> veces que un administrador guardó modificaciones. El registro empezó ${primera ? `el ${fechaHoraCorta(primera)}` : "con esta versión"}; no hay datos de antes.</p>
+    </div></section>`;
+  }
+  function eventosActividad(ev, tipo) {
+    if (tipo !== "click") return false;
+    const b = ev.target.closest("button") || ev.target; const d = b.dataset || {};
+    if ("actRecargar" in d) { ACT.filas = null; ACT.error = ""; US.lista = null; render(); return true; }
+    if (d.vista === "uso-dias") { ACT.dias = +d.v; UI.vistas["uso-dias"] = d.v; ACT.filas = null; render(); return true; }
+    return false;
+  }
+
   /* --------------------------------------------------- acceso y sesión */
   async function salir(mensaje) {
+    await usoEnviar(/inactividad/.test(mensaje || "") ? "inactividad" : /expir/.test(mensaje || "") ? "sesión expirada" : "cerró sesión");
     if (NUBE && esAdmin() && SYNC.estado === "pendiente") { clearTimeout(guardadoPend); try { await sincronizar(); } catch (e) {} }
     YO = null; clearInterval(relojInact);
     ["aviso-inact", "aviso-datos"].forEach((id) => { const el = document.getElementById(id); if (el) el.remove(); });
@@ -2993,6 +3124,7 @@
     if (yo.debe_cambiar) return pantallaCambio(true);
     vigilarInactividad();
     try { await cargarNube(); } catch (e) { return cajaAcceso(`<div class="aviso">No se pudieron cargar los datos: ${esc(e.message)}</div><button class="btn" type="button" data-salir>Salir</button>`); }
+    usoIniciar();
     if (!BASE) return pantallaSinBase();
     arrancar();
   }

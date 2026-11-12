@@ -514,3 +514,14 @@ table.t-marcador td.n { white-space: nowrap; }
 .mu-item:hover, .mu-item:focus-visible { background: var(--panel2); outline: none; }
 .mu-item.peligro, .mu-item.peligro svg { color: var(--bad); }
 @media (max-width: 1500px) { .top-in .marca span { display: none; } }
+
+/* Actividad: encabezados en dos renglones y columnas que caben en pantalla */
+table.t-actividad { width: 100%; }
+table.t-actividad th { white-space: normal; line-height: 1.25; vertical-align: bottom; min-width: 4.5em; max-width: 9em; }
+table.t-actividad th.ord { cursor: pointer; user-select: none; }
+table.t-actividad th.ord:hover { color: var(--ink); }
+table.t-actividad td { vertical-align: top; }
+table.t-actividad td.nombre { min-width: 11em; }
+table.t-actividad td.secc { font-size: 12.5px; min-width: 12em; max-width: 18em; white-space: normal; }
+table.t-actividad td.fecha { font-family: var(--f-mono); font-size: 12px; min-width: 8.5em; white-space: normal; }
+table.t-actividad .cod { overflow-wrap: anywhere; }

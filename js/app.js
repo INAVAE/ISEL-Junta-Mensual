@@ -688,6 +688,33 @@
   const ESTADOS = [["pendiente", "Pendiente"], ["en_proceso", "En proceso"], ["cumplido", "Cumplido"], ["no_cumplido", "No cumplido"], ["reprogramado", "Reprogramado"], ["cancelado", "Cancelado"]];
   // Orden ascendente: junta más antigua primero y, dentro de cada junta, por número de prioridad
   const ordenComp = (a, b) => (a.junta < b.junta ? -1 : a.junta > b.junta ? 1 : (fin(+a.prioridad) && String(a.prioridad).trim() !== "" ? +a.prioridad : 999) - (fin(+b.prioridad) && String(b.prioridad).trim() !== "" ? +b.prioridad : 999));
+  // Seguimiento: cada comentario se guarda con su fecha y autor (bitácora)
+  const MESES_C = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+  const fechaCorta = (iso) => { const d = new Date(iso); return isNaN(d) ? "" : `${d.getDate()} ${MESES_C[d.getMonth()]} ${d.getFullYear()}`; };
+  const fechaHora = (iso) => { const d = new Date(iso); return isNaN(d) ? "" : `${fechaCorta(iso)}, ${d.toLocaleTimeString("es-MX", { hour: "numeric", minute: "2-digit" })}`; };
+  const hace = (iso) => { const dd = Math.floor((Date.now() - new Date(iso)) / 864e5); return dd <= 0 ? "hoy" : dd === 1 ? "ayer" : `hace ${dd} días`; };
+  const bitacora = (x) => (Array.isArray(x.bitacora) ? x.bitacora : []);
+  const ultimoSeg = (x) => bitacora(x).map((b) => b.fecha).filter(Boolean).sort().pop() || null;
+  function bitacoraComp(x) {
+    const B = bitacora(x); const legado = !B.length && String(x.seguimiento || "").trim();
+    const autor = (b) => (b.autor ? esc(b.autor.split("@")[0]) : "");
+    const items = [
+      ...(legado ? [`<li class="sin-fecha"><div class="bit-meta">Sin fecha registrada · capturado antes de que se guardaran las fechas</div><p>${esc(x.seguimiento)}</p></li>`] : []),
+      ...B.map((b, i) => `<li class="${b.fecha ? "" : "sin-fecha"}"><div class="bit-meta"><span class="${b.fecha ? "mono" : ""}">${b.fecha ? esc(fechaHora(b.fecha)) : "Sin fecha registrada · capturado antes de que se guardaran las fechas"}</span>${b.fecha ? ` · ${hace(b.fecha)}` : ""}${b.autor ? ` · ${autor(b)}` : ""}<button class="restaurar bit-borrar" type="button" data-bit-borrar="${x.id}" data-i="${i}" title="${UI.borrar === "b" + x.id + i ? "Confirmar" : "Quitar comentario"}">${UI.borrar === "b" + x.id + i ? "¿Quitar?" : "✕"}</button></div><p>${esc(b.texto)}</p></li>`),
+    ];
+    return `<div class="cf c-seg"><label for="bit-${x.id}">Seguimiento${B.length ? ` (${B.length} comentario${B.length === 1 ? "" : "s"})` : ""}</label>
+      ${items.length ? `<ol class="bitacora">${items.join("")}</ol>` : `<p class="nota-pie bit-vacio" style="margin:0">Sin comentarios de seguimiento.</p>`}
+      <div class="bit-nuevo"><textarea id="bit-${x.id}" rows="2" data-bit-txt="${x.id}" placeholder="Nuevo comentario: qué pasó, avance o evidencia (se guarda con la fecha de hoy)">${esc((UI.bitBorr || {})[x.id] || "")}</textarea><button class="btn chico prim" type="button" data-bit-agregar="${x.id}" title="Ctrl+Enter">Agregar comentario</button></div></div>`;
+  }
+  function agregarSeguimiento(id) {
+    const x = G.compromisos.find((z) => z.id === id); const ta = document.getElementById("bit-" + id);
+    const txt = String((ta && ta.value) || "").trim(); if (!x || !txt) { if (ta) ta.focus(); return; }
+    if (!Array.isArray(x.bitacora)) x.bitacora = String(x.seguimiento || "").trim() ? [{ fecha: null, autor: "", texto: String(x.seguimiento).trim() }] : [];
+    x.bitacora.push({ fecha: new Date().toISOString(), autor: (YO && YO.email) || "", texto: txt });
+    x.seguimiento = txt;
+    if (UI.bitBorr) delete UI.bitBorr[id];
+    guardar(); render(); toast("Comentario de seguimiento guardado");
+  }
   function tablaCompromisos(lista, conJunta) {
     lista = [...lista].sort(ordenComp);
     if (!lista.length) return `<div class="vacio">Sin compromisos con este filtro.</div>`;
@@ -702,6 +729,7 @@
           ${conJunta ? `<span class="chip-junta mono">Junta ${MC[+x.junta.slice(5) - 1]} ${x.junta.slice(0, 4)}</span>` : ""}
           <select class="estado-sel ${x.estado}" data-cf="estado" aria-label="Estado">${ESTADOS.map(([v, t]) => `<option value="${v}" ${x.estado === v ? "selected" : ""}>${t}</option>`).join("")}</select>
           ${vencido ? '<span class="sem bad">Vencido</span>' : ""}
+          ${(() => { const u = ultimoSeg(x); return u ? `<span class="chip-junta" title="Fecha del último comentario de seguimiento">Último seguimiento: ${esc(fechaCorta(u))}</span>` : ""; })()}
           <div class="avance" title="Avance"><span class="comp-etq">Avance</span><input type="range" min="0" max="100" step="10" value="${x.avance || 0}" data-cf="avance" aria-label="Avance"><span class="mono">${x.avance || 0}%</span></div>
           <button class="restaurar comp-borrar" data-comp-borrar="${x.id}" title="${UI.borrar === x.id ? "Confirmar" : "Eliminar"}" type="button">${UI.borrar === x.id ? "¿Eliminar?" : "✕"}</button>
         </header>
@@ -712,7 +740,7 @@
           ${linea(x, "fecha", "Fecha compromiso", "c-fecha", "date")}
           ${linea(x, "indicador", "Indicador que debe mover", "c-ind")}
           ${area(x, "esperado", "Resultado esperado", "c-esp")}
-          ${area(x, "seguimiento", "Seguimiento", "c-seg", "Qué pasó / evidencia")}
+          ${bitacoraComp(x)}
         </div></article>`;
     }).join("")}</div>`;
   }
@@ -1529,6 +1557,8 @@
     if ("kxNuevo" in d) { const J = junta(ctx().clave); (J.kpisExtra = J.kpisExtra || []).push({ n: "Nuevo indicador", v: "", meta: "" }); UI.modoEdicion = true; guardar(); render(); return; }
     if (d.kxBorrar) { const J = junta(ctx().clave); J.kpisExtra.splice(+d.kxBorrar, 1); guardar(); render(); return; }
     if (d.fcSem !== undefined) { const J = junta(ctx().clave); J.forecast = J.forecast || {}; if (d.fcSem) J.forecast.semaforo = d.fcSem; else delete J.forecast.semaforo; guardar(); render(); return; }
+    if (d.bitAgregar) { agregarSeguimiento(d.bitAgregar); return; }
+    if (d.bitBorrar) { const x = G.compromisos.find((z) => z.id === d.bitBorrar); const k = "b" + d.bitBorrar + d.i; if (x && UI.borrar === k) { x.bitacora.splice(+d.i, 1); const u = x.bitacora[x.bitacora.length - 1]; x.seguimiento = u ? u.texto : ""; UI.borrar = null; guardar(); } else UI.borrar = k; render(); return; }
     if ("compNuevo" in d) { const c = ctx(); const n = G.compromisos.filter((x) => x.junta === c.clave).length + 1; G.compromisos.push({ id: uid(), junta: c.clave, prioridad: n, problema: "", accion: "", responsable: "", fecha: "", indicador: "", esperado: "", estado: "pendiente", avance: 0, seguimiento: "" }); guardar(); render(); setTimeout(() => { const f = $$('[data-comp] textarea[data-cf="accion"]'); const el = f.find((x) => x.value === ""); if (el) el.focus(); }, 30); return; }
     if ("sugerir" in d) { const c = ctx(); const ap = (UI.reglas || []).filter((r) => r.ap); if (!ap.length) { toast("El diagnóstico no marca ninguna causa este mes."); return; } let n = G.compromisos.filter((x) => x.junta === c.clave).length; ap.forEach((r) => G.compromisos.push({ id: uid(), junta: c.clave, prioridad: ++n, problema: r.ent, accion: r.accion, responsable: "", fecha: "", indicador: r.ind, esperado: "", estado: "pendiente", avance: 0, seguimiento: "" })); guardar(); render(); toast(`Se agregaron ${ap.length} compromisos sugeridos; completa responsable y fecha.`); return; }
     if (d.compBorrar) { if (UI.borrar === d.compBorrar) { G.compromisos = G.compromisos.filter((x) => x.id !== d.compBorrar); UI.borrar = null; guardar(); } else UI.borrar = d.compBorrar; render(); return; }
@@ -1574,6 +1604,7 @@
     if (UI.tab === "campanas" && eventosCampana(ev, "input")) return;
     if (d.nota) { junta(ctx().clave).notas[d.nota] = t.value; guardar(); return; }
     if (d.juntaCampo) { junta(ctx().clave)[d.juntaCampo] = t.value; guardar(); return; }
+    if (d.bitTxt) { (UI.bitBorr = UI.bitBorr || {})[d.bitTxt] = t.value; return; }
     if (d.cf) { const x = G.compromisos.find((z) => z.id === t.closest("[data-comp]").dataset.comp); if (x) { x[d.cf] = d.cf === "avance" ? +t.value : t.value; if (d.cf === "avance") t.nextElementSibling.textContent = t.value + "%"; guardar(); } return; }
     if (d.canc !== undefined) { const J = junta(ctx().clave); J.canceladas[+d.canc][d.campo] = t.value; guardar(); return; }
     if (d.msQ) { UI.busq[d.msQ] = t.value; render(); return; }
@@ -1583,6 +1614,7 @@
   });
   document.addEventListener("keydown", (ev) => {
     if (ev.key === "Escape" && UI.modal) { UI.modal = null; render(); return; }
+    if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey) && ev.target.dataset && ev.target.dataset.bitTxt && esAdmin()) { ev.preventDefault(); agregarSeguimiento(ev.target.dataset.bitTxt); return; }
     if (ev.key === "Escape" && UI.abierto) { UI.abierto = null; render(); return; }
     if (UI.foco && !ev.target.closest("input, textarea, select")) {
       if (ev.key === "Escape") { cerrarFoco(); return; }
@@ -2580,8 +2612,8 @@
   document.addEventListener("submit", (ev) => { if (UI.tab === "usuarios") eventosUsuarios(ev, "submit"); });
 
   /* ------------------------------------------ solo lectura (rol lector) */
-  const EDITA = ["nota", "juntaCampo", "cf", "an", "canc", "kx", "fc", "cliCart", "ed", "kpi", "cli", "op", "motivo", "cb", "cbCart", "cbMeta", "cbPrincipal", "cba", "cbMc", "cbX"];
-  const ACCIONES_ADMIN = ["modoEd", "compNuevo", "sugerir", "compBorrar", "anRegenerar", "anNuevo", "anBorrar", "anComp", "cancNueva", "cancBorrar", "kxNuevo", "kxBorrar", "fcSem", "igualar", "rest", "edQuitar", "edTodo", "baseReset", "importarTxt", "campNueva", "campEditar", "campBorrar", "opNueva", "opPegar", "opImportar", "opBorrar", "motivoNuevo", "motivoBorrar", "cbTodas", "opEditar", "campProd", "cbProdNuevo", "cbProdEditar", "cbProdBorrar", "cbXNuevo", "cbXBorrar"];
+  const EDITA = ["nota", "juntaCampo", "cf", "an", "canc", "kx", "fc", "cliCart", "ed", "kpi", "cli", "op", "motivo", "cb", "cbCart", "cbMeta", "cbPrincipal", "cba", "cbMc", "cbX", "bitTxt"];
+  const ACCIONES_ADMIN = ["modoEd", "compNuevo", "sugerir", "compBorrar", "anRegenerar", "anNuevo", "anBorrar", "anComp", "cancNueva", "cancBorrar", "kxNuevo", "kxBorrar", "fcSem", "igualar", "rest", "edQuitar", "edTodo", "baseReset", "importarTxt", "campNueva", "campEditar", "campBorrar", "opNueva", "opPegar", "opImportar", "opBorrar", "motivoNuevo", "motivoBorrar", "cbTodas", "opEditar", "campProd", "cbProdNuevo", "cbProdEditar", "cbProdBorrar", "cbXNuevo", "cbXBorrar", "bitAgregar", "bitBorrar"];
   const esEdicion = (d) => EDITA.some((k) => d[k] !== undefined) || ACCIONES_ADMIN.some((k) => d[k] !== undefined);
   function bloquearLector(raiz) {
     document.body.classList.toggle("lector", !esAdmin());

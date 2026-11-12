@@ -410,3 +410,32 @@ tr[data-op-fila] { cursor: default; }
 .reglas-pass li[data-regla]::before { content: "○"; width: 14px; text-align: center; color: var(--muted, #888); }
 .reglas-pass li.ok { color: var(--ok, #2a7d4f); }
 .reglas-pass li.ok::before { content: "✓"; color: var(--ok, #2a7d4f); font-weight: 700; }
+
+/* Compromisos: una tarjeta por compromiso, con espacio para leer y escribir */
+.comp-lista { display: flex; flex-direction: column; gap: 12px; }
+.comp-card { border: 1px solid var(--line); border-left: 4px solid var(--line); border-radius: 8px; background: var(--panel); padding: 10px 14px 12px; }
+.comp-card.e-cumplido { border-left-color: var(--ok); }
+.comp-card.e-en_proceso, .comp-card.e-reprogramado { border-left-color: var(--warn); }
+.comp-card.e-no_cumplido { border-left-color: var(--bad); }
+.comp-card.e-cancelado { opacity: .75; }
+.comp-cab { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-bottom: 8px; margin-bottom: 8px; border-bottom: 1px dashed var(--line); }
+.comp-num { display: inline-flex; align-items: center; gap: 2px; font-weight: 700; }
+.comp-card .comp-num input[data-cf] { width: 46px; text-align: center; font-weight: 700; padding: 4px; }
+.chip-junta { font-size: 12px; padding: 2px 8px; border-radius: 10px; background: var(--hover, rgba(127,127,127,.12)); }
+.comp-cab .estado-sel { font-size: 13px; padding: 3px 10px; }
+.comp-cab .avance { display: flex; align-items: center; gap: 8px; min-width: 220px; }
+.comp-cab .avance input[type="range"] { flex: 1; min-width: 110px; }
+.comp-etq { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink2); }
+.comp-borrar { margin-left: auto; }
+.comp-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 10px 14px; }
+.comp-grid .cf { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.comp-grid .cf > label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink2); }
+.c-problema { grid-column: span 5; } .c-accion { grid-column: span 7; }
+.c-resp { grid-column: span 3; } .c-fecha { grid-column: span 2; } .c-ind { grid-column: span 3; } .c-esp { grid-column: span 4; }
+.c-seg { grid-column: 1 / -1; }
+.comp-card textarea, .comp-card input:not([type="range"]) { width: 100%; border: 1px solid var(--line); background: var(--bg, transparent); color: var(--ink); border-radius: 5px; padding: 6px 8px; font: inherit; font-size: 14px; line-height: 1.4; }
+.comp-card textarea { resize: vertical; min-height: 3.4em; field-sizing: content; max-height: 16em; }
+.comp-card textarea:focus, .comp-card input:focus { border-color: var(--signal); outline: none; background: var(--panel); }
+.comp-card .solo-lectura { border-color: transparent; background: transparent; padding-left: 0; resize: none; }
+@media (max-width: 1000px) { .c-problema, .c-accion { grid-column: span 6; } .c-resp, .c-fecha, .c-ind { grid-column: span 4; } .c-esp { grid-column: 1 / -1; } }
+@media (max-width: 640px) { .comp-grid > .cf { grid-column: 1 / -1; } .comp-cab .avance { min-width: 0; width: 100%; } }

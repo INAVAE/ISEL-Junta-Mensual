@@ -688,21 +688,30 @@
   const ESTADOS = [["pendiente", "Pendiente"], ["en_proceso", "En proceso"], ["cumplido", "Cumplido"], ["no_cumplido", "No cumplido"], ["reprogramado", "Reprogramado"], ["cancelado", "Cancelado"]];
   function tablaCompromisos(lista, conJunta) {
     if (!lista.length) return `<div class="vacio">Sin compromisos con este filtro.</div>`;
-    return `<div class="tabla-wrap" style="max-height:none"><table class="t compromisos"><thead><tr>${conJunta ? "<th>Junta</th>" : ""}<th style="width:44px">#</th><th>Problema</th><th>Acción</th><th>Responsable</th><th>Fecha</th><th>Indicador que debe mover</th><th>Resultado esperado</th><th>Estado</th><th>Avance</th><th>Seguimiento</th><th></th></tr></thead><tbody>
-      ${lista.map((x) => `<tr data-comp="${x.id}">
-        ${conJunta ? `<td class="mono" style="white-space:nowrap">${MC[+x.junta.slice(5) - 1]} ${x.junta.slice(0, 4)}</td>` : ""}
-        <td><input data-cf="prioridad" value="${esc(x.prioridad)}" style="width:36px" inputmode="numeric" aria-label="Prioridad"></td>
-        <td><textarea rows="2" data-cf="problema" aria-label="Problema">${esc(x.problema)}</textarea></td>
-        <td style="min-width:200px"><textarea rows="2" data-cf="accion" aria-label="Acción">${esc(x.accion)}</textarea></td>
-        <td><input data-cf="responsable" value="${esc(x.responsable)}" aria-label="Responsable" style="min-width:110px"></td>
-        <td><input type="date" data-cf="fecha" value="${esc(x.fecha)}" aria-label="Fecha compromiso"></td>
-        <td><input data-cf="indicador" value="${esc(x.indicador)}" aria-label="Indicador" style="min-width:120px"></td>
-        <td><textarea rows="2" data-cf="esperado" aria-label="Resultado esperado">${esc(x.esperado)}</textarea></td>
-        <td><select class="estado-sel ${x.estado}" data-cf="estado" aria-label="Estado">${ESTADOS.map(([v, t]) => `<option value="${v}" ${x.estado === v ? "selected" : ""}>${t}</option>`).join("")}</select>${x.fecha && x.fecha < isoLocal(hoy) && !["cumplido", "cancelado"].includes(x.estado) ? '<div class="cod neg" style="margin:2px 0 0">vencido</div>' : ""}</td>
-        <td><div class="avance"><input type="range" min="0" max="100" step="10" value="${x.avance || 0}" data-cf="avance" aria-label="Avance"><span class="mono">${x.avance || 0}%</span></div></td>
-        <td style="min-width:180px"><textarea rows="2" data-cf="seguimiento" placeholder="Qué pasó / evidencia" aria-label="Seguimiento">${esc(x.seguimiento)}</textarea></td>
-        <td><button class="restaurar" data-comp-borrar="${x.id}" title="${UI.borrar === x.id ? "Confirmar" : "Eliminar"}" type="button">${UI.borrar === x.id ? "¿Eliminar?" : "✕"}</button></td></tr>`).join("")}
-      </tbody></table></div>`;
+    const campo = (x, k, etq, html, cls = "") => `<div class="cf ${cls}"><label for="cf-${x.id}-${k}">${etq}</label>${html}</div>`;
+    const area = (x, k, etq, cls, ph = "") => campo(x, k, etq, `<textarea id="cf-${x.id}-${k}" rows="2" data-cf="${k}" ${ph ? `placeholder="${ph}"` : ""}>${esc(x[k])}</textarea>`, cls);
+    const linea = (x, k, etq, cls, tipo = "text") => campo(x, k, etq, `<input id="cf-${x.id}-${k}" type="${tipo}" data-cf="${k}" value="${esc(x[k])}">`, cls);
+    return `<div class="comp-lista">${lista.map((x) => {
+      const vencido = x.fecha && x.fecha < isoLocal(hoy) && !["cumplido", "cancelado"].includes(x.estado);
+      return `<article class="comp-card e-${x.estado}" data-comp="${x.id}">
+        <header class="comp-cab">
+          <span class="comp-num"><label for="cf-${x.id}-prioridad">#</label><input id="cf-${x.id}-prioridad" data-cf="prioridad" value="${esc(x.prioridad)}" inputmode="numeric" aria-label="Prioridad"></span>
+          ${conJunta ? `<span class="chip-junta mono">Junta ${MC[+x.junta.slice(5) - 1]} ${x.junta.slice(0, 4)}</span>` : ""}
+          <select class="estado-sel ${x.estado}" data-cf="estado" aria-label="Estado">${ESTADOS.map(([v, t]) => `<option value="${v}" ${x.estado === v ? "selected" : ""}>${t}</option>`).join("")}</select>
+          ${vencido ? '<span class="sem bad">Vencido</span>' : ""}
+          <div class="avance" title="Avance"><span class="comp-etq">Avance</span><input type="range" min="0" max="100" step="10" value="${x.avance || 0}" data-cf="avance" aria-label="Avance"><span class="mono">${x.avance || 0}%</span></div>
+          <button class="restaurar comp-borrar" data-comp-borrar="${x.id}" title="${UI.borrar === x.id ? "Confirmar" : "Eliminar"}" type="button">${UI.borrar === x.id ? "¿Eliminar?" : "✕"}</button>
+        </header>
+        <div class="comp-grid">
+          ${area(x, "problema", "Problema", "c-problema")}
+          ${area(x, "accion", "Acción", "c-accion")}
+          ${linea(x, "responsable", "Responsable", "c-resp")}
+          ${linea(x, "fecha", "Fecha compromiso", "c-fecha", "date")}
+          ${linea(x, "indicador", "Indicador que debe mover", "c-ind")}
+          ${area(x, "esperado", "Resultado esperado", "c-esp")}
+          ${area(x, "seguimiento", "Seguimiento", "c-seg", "Qué pasó / evidencia")}
+        </div></article>`;
+    }).join("")}</div>`;
   }
   function bAccion() {
     const c = ctx();
@@ -1517,7 +1526,7 @@
     if ("kxNuevo" in d) { const J = junta(ctx().clave); (J.kpisExtra = J.kpisExtra || []).push({ n: "Nuevo indicador", v: "", meta: "" }); UI.modoEdicion = true; guardar(); render(); return; }
     if (d.kxBorrar) { const J = junta(ctx().clave); J.kpisExtra.splice(+d.kxBorrar, 1); guardar(); render(); return; }
     if (d.fcSem !== undefined) { const J = junta(ctx().clave); J.forecast = J.forecast || {}; if (d.fcSem) J.forecast.semaforo = d.fcSem; else delete J.forecast.semaforo; guardar(); render(); return; }
-    if ("compNuevo" in d) { const c = ctx(); const n = G.compromisos.filter((x) => x.junta === c.clave).length + 1; G.compromisos.push({ id: uid(), junta: c.clave, prioridad: n, problema: "", accion: "", responsable: "", fecha: "", indicador: "", esperado: "", estado: "pendiente", avance: 0, seguimiento: "" }); guardar(); render(); setTimeout(() => { const f = $$('tr[data-comp] textarea[data-cf="accion"]'); const el = f.find((x) => x.value === ""); if (el) el.focus(); }, 30); return; }
+    if ("compNuevo" in d) { const c = ctx(); const n = G.compromisos.filter((x) => x.junta === c.clave).length + 1; G.compromisos.push({ id: uid(), junta: c.clave, prioridad: n, problema: "", accion: "", responsable: "", fecha: "", indicador: "", esperado: "", estado: "pendiente", avance: 0, seguimiento: "" }); guardar(); render(); setTimeout(() => { const f = $$('[data-comp] textarea[data-cf="accion"]'); const el = f.find((x) => x.value === ""); if (el) el.focus(); }, 30); return; }
     if ("sugerir" in d) { const c = ctx(); const ap = (UI.reglas || []).filter((r) => r.ap); if (!ap.length) { toast("El diagnóstico no marca ninguna causa este mes."); return; } let n = G.compromisos.filter((x) => x.junta === c.clave).length; ap.forEach((r) => G.compromisos.push({ id: uid(), junta: c.clave, prioridad: ++n, problema: r.ent, accion: r.accion, responsable: "", fecha: "", indicador: r.ind, esperado: "", estado: "pendiente", avance: 0, seguimiento: "" })); guardar(); render(); toast(`Se agregaron ${ap.length} compromisos sugeridos; completa responsable y fecha.`); return; }
     if (d.compBorrar) { if (UI.borrar === d.compBorrar) { G.compromisos = G.compromisos.filter((x) => x.id !== d.compBorrar); UI.borrar = null; guardar(); } else UI.borrar = d.compBorrar; render(); return; }
     if ("cancNueva" in d) { const J = junta(ctx().clave); J.canceladas.push({ folio: "", fecha: "", cliente: "", cartera: "", monto: "", motivo: "" }); guardar(); render(); return; }
@@ -1549,7 +1558,7 @@
     if (d.cliCart !== undefined) { G.cliCart = G.cliCart || {}; if (t.value) G.cliCart[d.cliCart] = t.value; else delete G.cliCart[d.cliCart]; guardar(); render(); return; }
     if (d.an && t.tagName === "SELECT") { const A = G.analisis[ctx().clave]; A[d.an][+d.i][d.campo] = t.value; guardar(); render(); return; }
     if (t.id === "mes-sin-fecha" || t.id === "anio-sin-fecha") return;
-    if (d.cf === "estado") { const x = G.compromisos.find((z) => z.id === t.closest("tr").dataset.comp); if (x) { x.estado = t.value; if (t.value === "cumplido") x.avance = 100; guardar(); render(); } return; }
+    if (d.cf === "estado") { const x = G.compromisos.find((z) => z.id === t.closest("[data-comp]").dataset.comp); if (x) { x.estado = t.value; if (t.value === "cumplido") x.avance = 100; guardar(); render(); } return; }
     if (d.cf === "avance") { render(); return; }
     if (t.id === "archivos-excel") { cargarExcel([...t.files]); return; }
     if (t.id === "archivo-resp") { const f = t.files[0]; if (!f) return; f.text().then((s) => importar(JSON.parse(s))).catch(() => toast("El archivo no es un respaldo válido.")); return; }
@@ -1562,7 +1571,7 @@
     if (UI.tab === "campanas" && eventosCampana(ev, "input")) return;
     if (d.nota) { junta(ctx().clave).notas[d.nota] = t.value; guardar(); return; }
     if (d.juntaCampo) { junta(ctx().clave)[d.juntaCampo] = t.value; guardar(); return; }
-    if (d.cf) { const x = G.compromisos.find((z) => z.id === t.closest("tr").dataset.comp); if (x) { x[d.cf] = d.cf === "avance" ? +t.value : t.value; if (d.cf === "avance") t.nextElementSibling.textContent = t.value + "%"; guardar(); } return; }
+    if (d.cf) { const x = G.compromisos.find((z) => z.id === t.closest("[data-comp]").dataset.comp); if (x) { x[d.cf] = d.cf === "avance" ? +t.value : t.value; if (d.cf === "avance") t.nextElementSibling.textContent = t.value + "%"; guardar(); } return; }
     if (d.canc !== undefined) { const J = junta(ctx().clave); J.canceladas[+d.canc][d.campo] = t.value; guardar(); return; }
     if (d.msQ) { UI.busq[d.msQ] = t.value; render(); return; }
     if (d.busq) { UI.busq[d.busq] = t.value; render(); return; }

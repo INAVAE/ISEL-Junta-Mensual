@@ -1410,10 +1410,10 @@
     };
     return `<header class="top"><div class="top-in"><div class="marca"><strong>ISEL</strong><span>Junta mensual de resultados de ventas</span></div>
       <nav class="tabs" role="tablist">${[["junta", "Junta mensual"], ["analisis", "Análisis adicional"], ["campanas", "Campañas"], ["datos", "Datos"], ...(NUBE && esAdmin() ? [["usuarios", "Usuarios"], ["actividad", "Actividad"]] : [])].map(([v, t]) => `<button class="tab" role="tab" data-tab="${v}" aria-selected="${UI.tab === v}">${t}</button>`).join("")}</nav>
-      ${esAdmin() ? `<button class="chip-btn" data-modo-ed aria-pressed="${UI.modoEdicion}" type="button">${UI.modoEdicion ? "✎ Modificando cifras" : "✎ Modificar cifras"}</button>` : `<span class="chip-rol">Solo lectura</span>`}
+      ${esAdmin() ? `<button class="chip-btn" data-modo-ed aria-pressed="${UI.modoEdicion}" type="button">${UI.modoEdicion ? "✎ Modificando cifras" : "✎ Modificar cifras"}</button>` : ""}
       <button class="chip-btn" data-tendencias aria-pressed="${G.prefs.tendencias !== false}" type="button" title="Mostrar u ocultar las líneas de tendencia">↗ Tendencias</button>
-      <button class="chip-btn" data-tema type="button" title="Cambiar tema claro / oscuro">◐</button>
-      ${NUBE && YO ? `<span class="usuario-top"><span title="${esc(YO.email)}">${esc(YO.nombre || YO.email)}</span>${esAdmin() ? `<span id="estado-sync" data-e="${SYNC.estado}">${{ pendiente: "Guardando…", ok: "Guardado", error: "Sin guardar · reintentar" }[SYNC.estado]}</span>` : ""}<button class="chip-btn" type="button" data-mi-pass title="Cambiar mi contraseña">Contraseña</button><button class="chip-btn" type="button" data-salir>Salir</button></span>` : ""}</div>
+      ${NUBE && YO ? "" : `<button class="chip-btn" data-tema type="button" title="Cambiar tema claro / oscuro">◐</button>`}
+      ${NUBE && YO ? menuUsuario() : ""}</div>
       <div class="periodo"><div class="periodo-in"><label>Periodo</label>
         <div class="seg" role="group">${[["mes", "Mes"], ["trim", "Trimestre"], ["sem", "Semestre"], ["anio", "Año"], ["rango", "Personalizado"]].map(([v, t]) => `<button type="button" data-ptipo="${v}" aria-pressed="${P.tipo === v}">${t}</button>`).join("")}</div>
         ${P.tipo !== "rango" ? `<select id="p-anio" aria-label="Año">${anios.map((a) => `<option ${P.anio === a ? "selected" : ""}>${a}</option>`).join("")}</select>` : ""}${ctrl[P.tipo]}
@@ -1534,6 +1534,9 @@
     const t = ev.target.closest("button, a, label") || ev.target;
     const d = t.dataset || {};
     if (d.ojo) { alternarOjo(t); return; }
+    if ("menuUsuario" in d) { UI.menuUsuario = !UI.menuUsuario; render(); if (UI.menuUsuario) setTimeout(() => { const f = $(".mu-panel .mu-item"); if (f) f.focus(); }, 0); return; }
+    if (UI.menuUsuario) { UI.menuUsuario = false; const pn = $(".mu-panel"); if (pn) pn.remove(); const ab = $(".avatar-btn"); if (ab) ab.setAttribute("aria-expanded", "false"); }
+    if ("reintentarSync" in d) { sincronizar(); return; }
     if ("salir" in d) { salir(); return; }
     if ("seguir" in d) { actividad(); return; }
     if ("recargarBase" in d) { recargarBase(); return; }
@@ -1630,6 +1633,7 @@
     if (d.an) { const A = G.analisis[ctx().clave]; if (!A) return; if (d.an === "situacion") A.situacion = t.value; else if (d.an === "enfoque") A.enfoque[+d.i] = t.value; else A[d.an][+d.i][d.campo] = t.value; guardar(); return; }
   });
   document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && UI.menuUsuario) { UI.menuUsuario = false; render(); const a = $(".avatar-btn"); if (a) a.focus(); return; }
     if (ev.key === "Escape" && UI.modal) { UI.modal = null; render(); return; }
     if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey) && ev.target.dataset && ev.target.dataset.bitTxt && esAdmin()) { ev.preventDefault(); agregarSeguimiento(ev.target.dataset.bitTxt); return; }
     if (ev.key === "Escape" && UI.abierto) { UI.abierto = null; render(); return; }
@@ -2698,13 +2702,44 @@
     else if (col === "cliente_cartera") { if (borrado) delete G.cliCart[clave]; else G.cliCart[clave] = datos.cartera; }
     else if (col === "config") { if (borrado) delete G.config[clave]; else G.config[clave] = datos; }
   }
+  // Menú de la cuenta: un ícono con las iniciales abre las opciones del usuario
+  const TEXTO_SYNC = { pendiente: "Guardando cambios…", ok: "Todo guardado", error: "Sin guardar · reintentar" };
+  const ICO = {
+    llave: `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2 20 3M16 7l3 3M14 9l2 2"/></svg>`,
+    usuarios: `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M18.5 14.8c1.6.8 2.7 2.6 3 5.2"/></svg>`,
+    actividad: `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>`,
+    tema: `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17a8.5 8.5 0 0 0 0-17z" fill="currentColor"/></svg>`,
+    salir: `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l5-5-5-5M15 12H4"/></svg>`,
+    nube: `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a4.5 4.5 0 0 1-.6-9 6 6 0 0 1 11.4 1.6A3.8 3.8 0 0 1 17.5 18z"/><path d="M9.5 13.5l2 2 3.5-4"/></svg>`,
+  };
+  const iniciales = (n) => { const p = String(n || "").replace(/@.*/, "").split(/[\s._-]+/).filter(Boolean); return ((p[0] || "?")[0] + (p.length > 1 ? p[p.length - 1][0] : (p[0] || "")[1] || "")).toUpperCase(); };
+  function menuUsuario() {
+    const abierto = !!UI.menuUsuario; const adm = esAdmin();
+    const avatar = `<button class="avatar-btn" type="button" data-menu-usuario aria-haspopup="menu" aria-expanded="${abierto}" title="${esc(`${YO.nombre || YO.email} · ${adm ? "Administrador" : "Solo lectura"}${adm ? " · " + TEXTO_SYNC[SYNC.estado] : ""}`)}">
+      <span class="avatar">${esc(iniciales(YO.nombre || YO.email))}</span>${adm ? `<i class="punto-sync" id="estado-sync-punto" data-e="${SYNC.estado}" aria-hidden="true"></i>` : ""}<span class="avatar-flecha" aria-hidden="true">▾</span></button>`;
+    if (!abierto) return `<div class="menu-usuario">${avatar}</div>`;
+    const item = (attr, ico, txt, extra = "") => `<button class="mu-item ${extra}" type="button" role="menuitem" ${attr}>${ico}<span>${txt}</span></button>`;
+    return `<div class="menu-usuario">${avatar}
+      <div class="mu-panel" role="menu" aria-label="Cuenta">
+        <div class="mu-cab"><span class="avatar grande">${esc(iniciales(YO.nombre || YO.email))}</span><div><b>${esc(YO.nombre || "—")}</b><div class="mu-correo">${esc(YO.email)}</div><span class="mu-rol ${adm ? "admin" : ""}">${adm ? "Administrador" : "Solo lectura"}</span></div></div>
+        ${adm ? `<div class="mu-sync"><span class="punto-sync" data-e="${SYNC.estado}"></span><span id="estado-sync" data-e="${SYNC.estado}">${TEXTO_SYNC[SYNC.estado]}</span>${SYNC.estado === "error" ? `<button class="btn chico" type="button" data-reintentar-sync>Reintentar</button>` : ""}</div>` : ""}
+        <div class="mu-sep"></div>
+        ${item("data-mi-pass", ICO.llave, "Cambiar contraseña")}
+        ${item("data-tema", ICO.tema, "Tema claro / oscuro")}
+        ${adm ? item('data-tab="usuarios"', ICO.usuarios, "Usuarios y accesos") + item('data-tab="actividad"', ICO.actividad, "Actividad de usuarios") : ""}
+        <div class="mu-sep"></div>
+        ${item("data-salir", ICO.salir, "Cerrar sesión", "peligro")}
+      </div></div>`;
+  }
   const claveReg = (r) => `${r.coleccion}|${r.clave}`;
   const masReciente = (a, b) => (!a ? b : !b ? a : a > b ? a : b);
 
   function marcarEstado(e, detalle) {
     SYNC.estado = e;
     const el = document.getElementById("estado-sync");
-    if (el) { el.dataset.e = e; el.textContent = { pendiente: "Guardando…", ok: "Guardado", error: "Sin guardar · reintentar" }[e] || ""; el.title = detalle || ""; }
+    if (el) { el.dataset.e = e; el.textContent = TEXTO_SYNC[e] || ""; el.title = detalle || ""; }
+    document.querySelectorAll(".punto-sync").forEach((p) => (p.dataset.e = e));
+    const av = document.querySelector(".avatar-btn"); if (av && YO) av.title = `${YO.nombre || YO.email} · Administrador · ${TEXTO_SYNC[e]}${detalle ? " (" + detalle + ")" : ""}`;
   }
   function programarSync() {
     marcarEstado("pendiente");

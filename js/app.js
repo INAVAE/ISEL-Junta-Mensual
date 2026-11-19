@@ -1161,7 +1161,7 @@
     T.push(`Con un cumplimiento promedio de <b>${fmtP(pct)}</b> en los ${restantes} meses que faltan (${fmtM(ventaMes)} por mes), ISEL cerraría ${a} en <b>${fmtM(cierre)}</b>, el <b>${fmtP(cump)}</b> de la meta anual de ${fmtM(c.mAnual, 1)}; ${gap >= 0 ? `la superaría por ${fmtM(gap)}` : `faltarían ${fmtM(-gap)}`}. ${totAnt ? `Contra la venta total de ${a - 1} (${fmtM(totAnt, 1)}) sería un ${cierre >= totAnt ? "crecimiento" : "decrecimiento"} de ${fmtP(Math.abs(cierre / totAnt - 1), 1)}.` : ""}`);
     let realismo;
     if (fin(mejor.r) && pct > mejor.r + 0.005) realismo = `Supone rendir cada mes por encima del mejor mes de ${a} (${MESES[mejor.m - 1]}, ${fmtP(mejor.r)}). Sin acciones extraordinarias es un escenario <b>poco probable</b>.`;
-    else if (fin(ritmo) && pct > ritmo + 0.05) realismo = `Exige mejorar ${fmtP(pct - ritmo)} puntos el ritmo del año (${fmtP(ritmo)}). Es <b>alcanzable solo si se corrigen</b> las causas del bloque Diagnóstico (conversión, vaciado de pendientes, generación de oportunidades).`;
+    else if (fin(ritmo) && pct > ritmo + 0.05) realismo = `Exige mejorar ${fmtP(pct - ritmo)} puntos el ritmo del año (${fmtP(ritmo)}). Es <b>alcanzable solo si se corrigen</b> las causas del bloque Diagnóstico (conversión, pendientes por surtir, generación de oportunidades).`;
     else if (fin(ritmo) && pct >= ritmo - 0.05) realismo = `Es consistente con el ritmo de cumplimiento del año (${fmtP(ritmo)}): es el <b>escenario más probable</b> si nada cambia.`;
     else realismo = `Está por debajo del ritmo del año (${fmtP(ritmo)}): es un escenario <b>conservador</b>, útil como piso de planeación.`;
     T.push(realismo);

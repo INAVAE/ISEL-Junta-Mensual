@@ -90,11 +90,13 @@
     margen: { n: "Margen de seguridad", u: "x", meta: 3.75, ayuda: "Cotizaciones abiertas ÷ meta del mes" },
     efectividad: { n: "Efectividad de cierre", u: "%", meta: 0.32, ayuda: "Pedidos ganados ÷ cotizado" },
     pendientes: { n: "Pendientes por surtir %", u: "%", meta: 1, ayuda: "Logrado contra la meta (Tablero ISEL)" },
-    pendientes_monto: { n: "Pendientes por surtir monto", u: "$", meta: null, ayuda: "Monto logrado (Tablero ISEL)" },
+    pendientes_monto: { n: "Pendientes por surtir monto", u: "$", meta: null, ayuda: "Monto surtido contra la meta (Tablero ISEL)" },
     cotizaciones: { n: "Cotizaciones abiertas (pipeline)", u: "$", meta: null },
     pedidos: { n: "Pedidos del mes", u: "$", meta: null },
     retencion: { n: "Retención de clientes", u: "%", meta: null, ayuda: "Clientes del trimestre anterior que volvieron a comprar" },
   };
+  // Lo que falta por surtir: meta de pendientes por surtir menos lo surtido (Tablero ISEL)
+  const faltaSurtir = (kpm) => (fin(kpm.v) && fin(kpm.meta) ? Math.max(0, kpm.meta - kpm.v) : null);
   function kpi(a, m, k) {
     const e = G.ed.k[`${a}-${m}-${k}`] || {};
     let v = fin(e.v) ? e.v : IDX.kp.get(`${a}-${m}-${k}`);
@@ -102,6 +104,7 @@
     let meta = fin(e.meta) ? e.meta : (BASE.metasKpi && fin(BASE.metasKpi[k]) ? BASE.metasKpi[k] : KPI_DEF[k] && KPI_DEF[k].meta);
     if (k === "cotizaciones" && !fin(e.meta)) { const t = tableroDe(a, m); meta = t && t.a === a && t.m === m ? t.datos.cotizaciones_meta : meta; }
     if (k === "pedidos" && !fin(e.meta)) { const t = tableroDe(a, m); meta = t && t.a === a && t.m === m ? t.datos.pedidos_meta : meta; }
+    if (k === "pendientes_monto" && !fin(e.meta)) { const t = tableroDe(a, m); meta = t && t.a === a && t.m === m ? t.datos.pendientes_monto_meta : meta; }
     return { v: fin(v) ? v : null, meta: fin(meta) ? meta : null, ed: fin(e.v) || fin(e.meta) };
   }
   // Datos con fecha (tablero, clientes…): el más reciente que no pase del mes indicado
@@ -547,12 +550,13 @@
     const ventaBaja = fin(cum) && cum < 0.9;
     const margenBajo = fin(km.v) && fin(km.meta) && km.v < km.meta;
     const efBaja = fin(ke.v) && fin(ke.meta) && ke.v < ke.meta * 0.8;
-    const dispAlto = (fin(kp.v) && fin(kp.meta) && kp.v < kp.meta * 0.8) || (fin(kpm.v) && c.per.meta && kpm.v > 0.3 * (c.per.meta / c.L.length));
+    const falta = faltaSurtir(kpm);
+    const dispAlto = (fin(kp.v) && fin(kp.meta) && kp.v < kp.meta * 0.8) || (fin(falta) && c.per.meta && falta > 0.3 * (c.per.meta / c.L.length));
     const reglas = [
       { si: `Venta baja (${fmtP(cum)}) + margen de seguridad bajo (${fmtX(km.v)} vs ${fmtX(km.meta)})`, ent: "Problema de generación de oportunidades", ap: ventaBaja && margenBajo, accion: "Generar oportunidades nuevas (> $20k) para subir el margen de seguridad", ind: "Margen de seguridad" },
       { si: `Margen suficiente + efectividad baja (${fmtP(ke.v, 1)} vs ${fmtP(ke.meta)})`, ent: "Hay negocio, pero no se está convirtiendo", ap: !margenBajo && efBaja, accion: "Revisar oportunidades en Propuesta / Negociación y su plan de cierre", ind: "Efectividad de cierre" },
       { si: "Margen suficiente + efectividad razonable + venta baja", ent: "Revisar timing, pedidos, disponibilidad o facturación", ap: ventaBaja && !margenBajo && !efBaja, accion: "Revisar pedidos por fecha compromiso, disponibilidad y facturación", ind: "Venta del mes" },
-      { si: `Pendientes por surtir monto alto (${fmtM(kpm.v)} · pendientes por surtir ${fmtP(kp.v)}) + venta baja`, ent: "Problema para surtir los pendientes", ap: ventaBaja && dispAlto, accion: "Surtir diario los pendientes disponibles", ind: "Pendientes por surtir %" },
+      { si: `Pendientes por surtir bajo (${fmtP(kp.v)}${fin(falta) ? ` · faltan ${fmtM(falta)} por surtir` : ""}) + venta baja`, ent: "Problema para surtir los pendientes", ap: ventaBaja && dispAlto, accion: "Surtir diario los pendientes disponibles", ind: "Pendientes por surtir %" },
     ];
     UI.reglas = reglas;
     const arbol = `<div class="arbol">${reglas.map((r) => `<div class="regla ${r.ap ? "aplica" : ""}"><span class="estado">${r.ap ? "● Aplica este mes" : "○ No aplica"}</span><span class="si">Si: ${esc(r.si)}</span><span class="entonces">→ ${esc(r.ent)}</span></div>`).join("")}</div>`;
@@ -674,7 +678,7 @@
         <div class="tira">
           <div class="celda"><label>Pipeline cotizado</label><div class="valor">${fmtM(pipeline)}</div><small>${UI.modoEdicion ? inp("pipeline", F.pipeline, "cotizaciones abiertas") : "cotizaciones abiertas (Odoo)"}</small></div>
           <div class="celda"><label>Margen de seguridad</label><div class="valor">${fmtX(mg.v)}</div><small>meta ${fmtX(mg.meta)}</small></div>
-          <div class="celda"><label>Pendientes por surtir monto</label><div class="valor">${fmtM(pdm.v)}</div><small>Tablero ISEL</small></div>
+          <div class="celda"><label>Pendientes por surtir monto</label><div class="valor">${fmtM(pdm.v)}</div><small>${fin(pdm.meta) ? `surtido de ${fmtM(pdm.meta)} · faltan ${fmtM(faltaSurtir(pdm))}` : "surtido (Tablero ISEL)"}</small></div>
           <div class="celda"><label>Pipeline × efectividad</label><div class="valor">${fmtM(esperado)}</div><small>a ${fmtP(ef.v, 1)} de cierre</small></div>
         </div>
         ${fin(enCurso) && enCurso > 0 ? `<p class="nota-pie">Avance real de ${MESES[Nm - 1]} a la fecha del reporte: ${fmt$(enCurso)} (${fmtP(div(enCurso, metaN))} de su meta).</p>` : ""}
@@ -1245,7 +1249,7 @@
     }
     if (fin(kp.v) && fin(kp.meta) && kp.v < kp.meta * 0.8) {
       H.push({ sev: kp.v < 0.6 ? "alto" : "medio", titulo: `Pendientes por surtir % en ${fmtP(kp.v)}`,
-        texto: `Pendientes por surtir monto: ${fmtM(kpm.v)}, equivalente a ${fmtP(div(kpm.v, c.per.meta / c.L.length))} de la meta mensual. Es venta que ya está ganada y que se puede facturar sin vender más.` });
+        texto: fin(faltaSurtir(kpm)) ? `Se surtieron ${fmtM(kpm.v)} de ${fmtM(kpm.meta)} en pendientes por surtir; faltan ${fmtM(faltaSurtir(kpm))}, equivalentes a ${fmtP(div(faltaSurtir(kpm), c.per.meta / c.L.length))} de la meta mensual. Es venta que ya está ganada y que se puede facturar sin vender más.` : `Pendientes por surtir monto: ${fmtM(kpm.v)} surtidos en el mes.` });
       E.push("Pendientes por surtir: surtir a diario lo disponible, con responsable por cartera y revisión de pedidos detenidos por crédito, documentación o logística.");
       plan("Surtir a diario los pendientes por surtir y reportar bloqueos", "Pendientes por surtir %", `≥ 90% de la meta`, 15);
     }
@@ -1295,7 +1299,7 @@
     if (fin(metaN)) {
       const r = div(prom, metaN);
       H.push({ sev: r < 0.8 ? "alto" : "medio", titulo: `${MESES[Nm - 1]} arranca con meta de ${fmtM(metaN)}`,
-        texto: `Con el promedio mensual del año (${fmtM(prom)}) se llegaría a ${fmtP(r)}. Lo disponible por facturar (${fmtM(kpm.v)}) y el pipeline (${fmtM(kc.v)}) son la palanca de corto plazo.` });
+        texto: `Con el promedio mensual del año (${fmtM(prom)}) se llegaría a ${fmtP(r)}. ${fin(faltaSurtir(kpm)) ? `Lo que falta por surtir (${fmtM(faltaSurtir(kpm))}) y el pipeline` : "El pipeline"} (${fmtM(kc.v)}) ${fin(faltaSurtir(kpm)) ? "son" : "es"} la palanca de corto plazo.` });
     }
     if (restantes && S.pctNec > 1.1) {
       E.push(`Meta: acordar con dirección un objetivo de cierre ${a} realista (por ejemplo ${fmtM(cierreRitmo)} al ritmo actual, o el escenario que se defina en el simulador) y medir cada junta la recuperación contra ese objetivo.`);

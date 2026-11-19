@@ -89,8 +89,8 @@
   const KPI_DEF = {
     margen: { n: "Margen de seguridad", u: "x", meta: 3.75, ayuda: "Cotizaciones abiertas ÷ meta del mes" },
     efectividad: { n: "Efectividad de cierre", u: "%", meta: 0.32, ayuda: "Pedidos ganados ÷ cotizado" },
-    pendientes: { n: "Vaciado de pendientes por surtir", u: "%", meta: 1, ayuda: "Facturado de lo disponible para surtir" },
-    pendientes_monto: { n: "Pendientes disponibles por facturar", u: "$", meta: null, ayuda: "Monto disponible sin facturar" },
+    pendientes: { n: "Pendientes por surtir %", u: "%", meta: 1, ayuda: "Logrado contra la meta (Tablero ISEL)" },
+    pendientes_monto: { n: "Pendientes por surtir monto", u: "$", meta: null, ayuda: "Monto logrado (Tablero ISEL)" },
     cotizaciones: { n: "Cotizaciones abiertas (pipeline)", u: "$", meta: null },
     pedidos: { n: "Pedidos del mes", u: "$", meta: null },
     retencion: { n: "Retención de clientes", u: "%", meta: null, ayuda: "Clientes del trimestre anterior que volvieron a comprar" },
@@ -552,13 +552,13 @@
       { si: `Venta baja (${fmtP(cum)}) + margen de seguridad bajo (${fmtX(km.v)} vs ${fmtX(km.meta)})`, ent: "Problema de generación de oportunidades", ap: ventaBaja && margenBajo, accion: "Generar oportunidades nuevas (> $20k) para subir el margen de seguridad", ind: "Margen de seguridad" },
       { si: `Margen suficiente + efectividad baja (${fmtP(ke.v, 1)} vs ${fmtP(ke.meta)})`, ent: "Hay negocio, pero no se está convirtiendo", ap: !margenBajo && efBaja, accion: "Revisar oportunidades en Propuesta / Negociación y su plan de cierre", ind: "Efectividad de cierre" },
       { si: "Margen suficiente + efectividad razonable + venta baja", ent: "Revisar timing, pedidos, disponibilidad o facturación", ap: ventaBaja && !margenBajo && !efBaja, accion: "Revisar pedidos por fecha compromiso, disponibilidad y facturación", ind: "Venta del mes" },
-      { si: `Disponibles por facturar altos (${fmtM(kpm.v)} · vaciado ${fmtP(kp.v)}) + venta baja`, ent: "Problema de vaciado de la bandeja de pendientes por surtir", ap: ventaBaja && dispAlto, accion: "Vaciado diario de pendientes disponibles", ind: "% de vaciado" },
+      { si: `Pendientes por surtir monto alto (${fmtM(kpm.v)} · pendientes por surtir ${fmtP(kp.v)}) + venta baja`, ent: "Problema para surtir los pendientes", ap: ventaBaja && dispAlto, accion: "Surtir diario los pendientes disponibles", ind: "Pendientes por surtir %" },
     ];
     UI.reglas = reglas;
     const arbol = `<div class="arbol">${reglas.map((r) => `<div class="regla ${r.ap ? "aplica" : ""}"><span class="estado">${r.ap ? "● Aplica este mes" : "○ No aplica"}</span><span class="si">Si: ${esc(r.si)}</span><span class="entonces">→ ${esc(r.ent)}</span></div>`).join("")}</div>`;
 
     // Evolución semanal
-    const opK = [{ v: "margen", t: "Margen de seguridad" }, { v: "efectividad", t: "Efectividad de cierre" }, { v: "pendientes", t: "Vaciado de pendientes" }];
+    const opK = [{ v: "margen", t: "Margen de seguridad" }, { v: "efectividad", t: "Efectividad de cierre" }, { v: "pendientes", t: "Pendientes por surtir %" }];
     registrarMs("diag-kpis", opK);
     const finP = new Date(c.L[c.L.length - 1][0], c.L[c.L.length - 1][1], 0);
     const W = (BASE.semanal || []).filter((w) => w.a === c.Ja && w.margen !== null && new Date(w.fecha + "T12:00:00") <= finP);
@@ -674,7 +674,7 @@
         <div class="tira">
           <div class="celda"><label>Pipeline cotizado</label><div class="valor">${fmtM(pipeline)}</div><small>${UI.modoEdicion ? inp("pipeline", F.pipeline, "cotizaciones abiertas") : "cotizaciones abiertas (Odoo)"}</small></div>
           <div class="celda"><label>Margen de seguridad</label><div class="valor">${fmtX(mg.v)}</div><small>meta ${fmtX(mg.meta)}</small></div>
-          <div class="celda"><label>Disponibles por facturar</label><div class="valor">${fmtM(pdm.v)}</div><small>pendientes por surtir</small></div>
+          <div class="celda"><label>Pendientes por surtir monto</label><div class="valor">${fmtM(pdm.v)}</div><small>Tablero ISEL</small></div>
           <div class="celda"><label>Pipeline × efectividad</label><div class="valor">${fmtM(esperado)}</div><small>a ${fmtP(ef.v, 1)} de cierre</small></div>
         </div>
         ${fin(enCurso) && enCurso > 0 ? `<p class="nota-pie">Avance real de ${MESES[Nm - 1]} a la fecha del reporte: ${fmt$(enCurso)} (${fmtP(div(enCurso, metaN))} de su meta).</p>` : ""}
@@ -1244,10 +1244,10 @@
       plan("Generar oportunidades nuevas mayores a $20 mil por cartera", "Margen de seguridad", `≥ ${fmtX(km.meta)}`);
     }
     if (fin(kp.v) && fin(kp.meta) && kp.v < kp.meta * 0.8) {
-      H.push({ sev: kp.v < 0.6 ? "alto" : "medio", titulo: `Vaciado de pendientes por surtir en ${fmtP(kp.v)}`,
-        texto: `Hay ${fmtM(kpm.v)} disponibles para facturar, equivalentes a ${fmtP(div(kpm.v, c.per.meta / c.L.length))} de la meta mensual. Es venta que ya está ganada y que se puede facturar sin vender más.` });
-      E.push("Pendientes por surtir: vaciado diario de lo disponible, con responsable por cartera y revisión de pedidos detenidos por crédito, documentación o logística.");
-      plan("Vaciado diario de pendientes disponibles por facturar y reporte de bloqueos", "% de vaciado de pendientes", `≥ 90% del disponible`, 15);
+      H.push({ sev: kp.v < 0.6 ? "alto" : "medio", titulo: `Pendientes por surtir % en ${fmtP(kp.v)}`,
+        texto: `Pendientes por surtir monto: ${fmtM(kpm.v)}, equivalente a ${fmtP(div(kpm.v, c.per.meta / c.L.length))} de la meta mensual. Es venta que ya está ganada y que se puede facturar sin vender más.` });
+      E.push("Pendientes por surtir: surtir a diario lo disponible, con responsable por cartera y revisión de pedidos detenidos por crédito, documentación o logística.");
+      plan("Surtir a diario los pendientes por surtir y reportar bloqueos", "Pendientes por surtir %", `≥ 90% de la meta`, 15);
     }
     // 4. Carteras
     const cart = tablaDim("cartera", Lac).filter((x) => x.meta > 0);
@@ -1304,7 +1304,7 @@
     const ord = { critico: 0, alto: 1, medio: 2 };
     H.sort((x, y) => ord[x.sev] - ord[y.sev]);
     const crit = H.filter((h) => h.sev === "critico").length;
-    const situacion = `Al cierre de ${MESES[m - 1]} ${a}, ISEL acumula ${fmtM(c.acum.log)}, ${fmtP(cumA)} de la meta a la fecha y ${fmtP(avance)} de la meta anual, con un déficit de ${fmtM(Math.abs(c.acum.log - c.acum.meta))} que ${d.delta < 0 ? "se sigue ampliando" : "empezó a reducirse"}. ${c.acumAnt && c.acumAnt.log ? `La venta crece ${fmtPs(c.acum.log / c.acumAnt.log - 1, 1)} contra ${a - 1}, insuficiente para la meta planteada. ` : ""}Los indicadores apuntan a que la brecha se origina sobre todo en la conversión del pipeline${fin(kp.v) && kp.v < 0.8 ? " y en el vaciado de pendientes por surtir" : ""}, más que en la falta de oportunidades. ${crit ? `Hay ${crit} ${crit === 1 ? "tema crítico" : "temas críticos"} que requieren decisión en esta junta.` : ""}`;
+    const situacion = `Al cierre de ${MESES[m - 1]} ${a}, ISEL acumula ${fmtM(c.acum.log)}, ${fmtP(cumA)} de la meta a la fecha y ${fmtP(avance)} de la meta anual, con un déficit de ${fmtM(Math.abs(c.acum.log - c.acum.meta))} que ${d.delta < 0 ? "se sigue ampliando" : "empezó a reducirse"}. ${c.acumAnt && c.acumAnt.log ? `La venta crece ${fmtPs(c.acum.log / c.acumAnt.log - 1, 1)} contra ${a - 1}, insuficiente para la meta planteada. ` : ""}Los indicadores apuntan a que la brecha se origina sobre todo en la conversión del pipeline${fin(kp.v) && kp.v < 0.8 ? " y en los pendientes por surtir" : ""}, más que en la falta de oportunidades. ${crit ? `Hay ${crit} ${crit === 1 ? "tema crítico" : "temas críticos"} que requieren decisión en esta junta.` : ""}`;
     return { generado: new Date().toISOString(), periodo: c.clave, situacion, hallazgos: H, enfoque: E, plan: P.slice(0, 8) };
   }
   function sGeneral() {
